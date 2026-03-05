@@ -2,7 +2,6 @@ pub mod constraints;
 pub use constraints::*;
 
 pub mod elgamal;
-pub mod rsa;
 
 use crate::Error;
 use ark_std::rand::Rng;
