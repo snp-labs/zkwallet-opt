@@ -1,0 +1,107 @@
+[package]
+name = "zkwallet-opt"
+version = "0.1.0"
+edition = "2024"
+
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+
+anyhow = "1.0.93"
+ark-bn254 = "0.5.0"
+ark-crypto-primitives = {version = "0.5.0", default-features = true, features = [ "r1cs", "encryption", "crh", "merkle_tree" ]}
+ark-ec = "0.5.0"
+ark-ed-on-bn254 = {version = "0.5.0", features = [ "r1cs" ]}
+ark-ff = "0.5.0"
+ark-groth16 = "0.5.0"
+ark-poly = "0.5.0"
+ark-r1cs-std = "0.5.0"
+ark-relations = "0.5.1"
+ark-serialize = "0.5.0"
+ark-std = "0.5.0"
+
+num-bigint = "0.4.6"
+derivative = "2.2.0"
+rand = "0.8.5"
+rsa = "0.9.8"
+sha2 = "0.10.6"
+
+tracing = { version = "0.1.40" }
+rayon = { version = "1.10.0", optional = true }
+num-traits = "0.2.19"
+thiserror = "2.0.12"
+
+# rsa의 간접 dependency (^1.4 필요)
+# 버전을 명시하지 않으면 rust 1.82.0에서 사용할 수 없는 버전이 설치되어 버전 명시
+base64ct = "=1.5.0"
+
+[dev-dependencies]
+ark-bls12-381 = "0.5.0"
+ark-ed-on-bls12-381 = {version = "0.5.0", features = [ "r1cs" ]}
+ark-bls12-377 = "0.5.0"
+ark-cp6-782 = "0.5.0"
+ark-mnt4-298 = { version = "0.5.0", default-features = false, features = ["r1cs", "curve"] }
+ark-mnt6-298 = { version = "0.5.0", default-features = false, features = ["r1cs"] }
+ark-mnt4-753 = { version = "0.5.0", default-features = false, features = ["r1cs", "curve"] }
+ark-mnt6-753 = { version = "0.5.0", default-features = false, features = ["r1cs"] }
+
+[features]
+default = ["ark-crypto-primitives/r1cs", "zksurvey"]
+print-trace = ["ark-std/print-trace"]
+std = [
+    "ark-ff/std",
+    "ark-ec/std",
+    "ark-poly/std",
+    "ark-relations/std",
+    "ark-crypto-primitives/std",
+    "ark-std/std",
+    "ark-groth16/std",
+]
+parallel = [
+    "std",
+    "ark-ff/parallel",
+    "ark-poly/parallel",
+    "ark-ec/parallel",
+    "ark-crypto-primitives/parallel",
+    "ark-std/parallel",
+    "ark-groth16/parallel",
+    "rayon",
+]
+
+zkwallet = []
+zkdid = []
+zksbt = []
+zksurvey = ["cc-groth16"]
+
+zkvoting-binary = []
+zkvoting-binary-weight = []
+zkvoting-preference = []
+zkvoting-score = []
+zkvoting-nec-optimized = []
+
+zkvoting-pollstation-deprecated = []
+
+zkvoting-online = ["cc-groth16"]
+zkvoting-pollstation = ["cc-groth16"]
+zkvoting-tally-online = ["cc-groth16"]
+zkvoting-tally-pollstation = ["cc-groth16"]
+zkvoting-membership = []
+zkvoting = [
+    "zkvoting-binary",
+    "zkvoting-binary-weight",
+    "zkvoting-preference",
+    "zkvoting-score",
+    "zkvoting-nec-optimized",
+    "zkvoting-online",
+    "zkvoting-pollstation",
+    "zkvoting-tally-online",
+    "zkvoting-tally-pollstation",
+    "zkvoting-membership",
+    "cc-groth16",
+]
+
+cc-groth16 = []
+
+[profile.release]
+opt-level = 3
