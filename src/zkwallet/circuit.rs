@@ -506,24 +506,11 @@ where
 
         /////////////////////////////////////////////////////////////////
         // pv pv_ dv dv_ range check
-        let MODULUS_MINUS_ONE_DIV_TWO =
-            C::BaseField::from_bigint(C::BaseField::MODULUS_MINUS_ONE_DIV_TWO).unwrap();
-        let MODULUS_MINUS_ONE_DIV_TWO_DIV_TWO =
-            MODULUS_MINUS_ONE_DIV_TWO / C::BaseField::from_bigint(2_u64.into()).unwrap();
-        let check_range = FpVar::new_constant(
-            ark_relations::ns!(cs, "MODULUS_MINUS_ONE_DIV_TWO_DIV_TWO"),
-            MODULUS_MINUS_ONE_DIV_TWO_DIV_TWO,
-        )?;
-
-        (result_v_in_ena_old.m * is_cin).enforce_cmp_unchecked(
-            &check_range.clone(),
-            std::cmp::Ordering::Less,
-            false,
-        )?;
-        pv.enforce_cmp_unchecked(&check_range.clone(), std::cmp::Ordering::Less, false)?;
-        pv_.enforce_cmp_unchecked(&check_range.clone(), std::cmp::Ordering::Less, false)?;
-        dv.enforce_cmp_unchecked(&check_range.clone(), std::cmp::Ordering::Less, false)?;
-        dv_.enforce_cmp_unchecked(&check_range, std::cmp::Ordering::Less, false)?;
+        (result_v_in_ena_old.m * is_cin).to_bits_le_with_top_bits_zero(64)?;
+        pv.to_bits_le_with_top_bits_zero(64)?;
+        pv_.to_bits_le_with_top_bits_zero(64)?;
+        dv.to_bits_le_with_top_bits_zero(64)?;
+        dv_.to_bits_le_with_top_bits_zero(64)?;
         /////////////////////////////////////////////////////////////////
 
         Ok(())
