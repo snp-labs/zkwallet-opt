@@ -292,9 +292,7 @@ where
 
         /////////////////////////////////////////////////////////////////
         // check k == g(k_point_x, _k_point_y)
-        let check_g_k_point_x = k.plaintext.to_bits_le()?;
-        let check_g_k_point_x =
-            Boolean::le_bits_to_fp(&check_g_k_point_x[..check_g_k_point_x.len() / 2])?;
+        let check_g_k_point_x = k.plaintext.to_constraint_field()?[0].clone();
         check_g_k_point_x.enforce_equal(&k_point_x.k)?;
         /////////////////////////////////////////////////////////////////
 
@@ -311,11 +309,8 @@ where
 
         /////////////////////////////////////////////////////////////////
         // addr_send <- H(pk_send_own || pk_send_enc)
-        let binding = k_u.clone().pk.to_bits_le()?;
-        let pk_enc_send_point_x = Boolean::le_bits_to_fp(&binding[..binding.len() / 2])?;
-        let pk_enc_send_point_y = Boolean::le_bits_to_fp(&binding[binding.len() / 2..])?;
-
-        let hash_input = [k_b, pk_enc_send_point_x, pk_enc_send_point_y].to_vec();
+        let pk_enc_send_point = k_u.clone().pk.to_constraint_field()?;
+        let hash_input = vec![vec![k_b], pk_enc_send_point].concat();
         let result_addr_send = MiMCGadget::<C::BaseField>::evaluate(&rc, &hash_input).unwrap();
         result_addr_send.enforce_equal(&addr)?;
         /////////////////////////////////////////////////////////////////
@@ -402,11 +397,9 @@ where
 
         /////////////////////////////////////////////////////////////////
         // addr_recv <- H(pk_recv_own || pk_recv_enc)
-        let binding = k_u_.clone().pk.to_bits_le()?;
-        let pk_enc_recv_point_x = Boolean::le_bits_to_fp(&binding[..binding.len() / 2])?;
-        let pk_enc_recv_point_y = Boolean::le_bits_to_fp(&binding[binding.len() / 2..])?;
+        let pk_enc_recv_point = k_u_.clone().pk.to_constraint_field()?;
 
-        let hash_input = vec![k_b_, pk_enc_recv_point_x, pk_enc_recv_point_y];
+        let hash_input = vec![vec![k_b_], pk_enc_recv_point].concat();
         let result_addr_recv = MiMCGadget::<C::BaseField>::evaluate(&rc, &hash_input).unwrap();
         result_addr_recv.enforce_equal(&addr_r)?;
         /////////////////////////////////////////////////////////////////
