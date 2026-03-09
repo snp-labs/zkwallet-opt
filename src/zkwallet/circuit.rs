@@ -499,24 +499,12 @@ where
 
         /////////////////////////////////////////////////////////////////
         // pv pv_ dv dv_ range check
-        let MODULUS_MINUS_ONE_DIV_TWO =
-            C::BaseField::from_bigint(C::BaseField::MODULUS_MINUS_ONE_DIV_TWO).unwrap();
-        let MODULUS_MINUS_ONE_DIV_TWO_DIV_TWO =
-            MODULUS_MINUS_ONE_DIV_TWO / C::BaseField::from_bigint(2_u64.into()).unwrap();
-        let check_range = FpVar::new_constant(
-            ark_relations::ns!(cs, "MODULUS_MINUS_ONE_DIV_TWO_DIV_TWO"),
-            MODULUS_MINUS_ONE_DIV_TWO_DIV_TWO,
-        )?;
-
-        (result_v_in_ena_old.m * is_cin).enforce_cmp_unchecked(
-            &check_range.clone(),
-            std::cmp::Ordering::Less,
-            false,
-        )?;
-        pv.enforce_cmp_unchecked(&check_range.clone(), std::cmp::Ordering::Less, false)?;
-        pv_.enforce_cmp_unchecked(&check_range.clone(), std::cmp::Ordering::Less, false)?;
-        dv.enforce_cmp_unchecked(&check_range.clone(), std::cmp::Ordering::Less, false)?;
-        dv_.enforce_cmp_unchecked(&check_range, std::cmp::Ordering::Less, false)?;
+        let MODULUS_BIT_SIZE_MINUS_ONE = (C::BaseField::MODULUS_BIT_SIZE - 1) as usize;
+        let _ = (result_v_in_ena_old.m * is_cin).to_bits_le_with_top_bits_zero(MODULUS_BIT_SIZE_MINUS_ONE)?;
+        let _ = pv.to_bits_le_with_top_bits_zero(MODULUS_BIT_SIZE_MINUS_ONE)?;
+        let _ = pv_.to_bits_le_with_top_bits_zero(MODULUS_BIT_SIZE_MINUS_ONE)?;
+        let _ = dv.to_bits_le_with_top_bits_zero(MODULUS_BIT_SIZE_MINUS_ONE)?;
+        let _ = dv_.to_bits_le_with_top_bits_zero(MODULUS_BIT_SIZE_MINUS_ONE)?;
         /////////////////////////////////////////////////////////////////
 
         Ok(())
