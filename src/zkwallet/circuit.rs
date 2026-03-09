@@ -506,11 +506,12 @@ where
 
         /////////////////////////////////////////////////////////////////
         // pv pv_ dv dv_ range check
-        (result_v_in_ena_old.m * is_cin).to_bits_le_with_top_bits_zero(64)?;
-        pv.to_bits_le_with_top_bits_zero(64)?;
-        pv_.to_bits_le_with_top_bits_zero(64)?;
-        dv.to_bits_le_with_top_bits_zero(64)?;
-        dv_.to_bits_le_with_top_bits_zero(64)?;
+        let MODULUS_BIT_SIZE_MINUS_ONE = (C::BaseField::MODULUS_BIT_SIZE - 1) as usize;
+        let _ = (result_v_in_ena_old.m * is_cin).to_bits_le_with_top_bits_zero(MODULUS_BIT_SIZE_MINUS_ONE)?;
+        let _ = pv.to_bits_le_with_top_bits_zero(MODULUS_BIT_SIZE_MINUS_ONE)?;
+        let _ = pv_.to_bits_le_with_top_bits_zero(MODULUS_BIT_SIZE_MINUS_ONE)?;
+        let _ = dv.to_bits_le_with_top_bits_zero(MODULUS_BIT_SIZE_MINUS_ONE)?;
+        let _ = dv_.to_bits_le_with_top_bits_zero(MODULUS_BIT_SIZE_MINUS_ONE)?;
         /////////////////////////////////////////////////////////////////
 
         Ok(())
