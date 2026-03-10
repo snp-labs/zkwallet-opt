@@ -6,7 +6,6 @@ use ark_std::hash::Hash;
 
 pub mod constraints;
 
-pub mod mimc7;
 pub mod poseidon;
 
 pub trait CRHScheme {

@@ -1,5 +1,6 @@
 use crate::Error;
 use ark_crypto_primitives::sponge::Absorb;
+use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
 use ark_ff::Field;
 use std::marker::PhantomData;
 
@@ -8,7 +9,7 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use super::SymmetricEncryption;
 use crate::gadget::hashes::{
     CRHScheme,
-    mimc7::{self, Parameters},
+    poseidon::PoseidonHash,
 };
 
 pub mod constraints;
@@ -40,9 +41,9 @@ pub struct SymmetricEncryptionScheme<F: Field> {
 
 impl<F> SymmetricEncryption for SymmetricEncryptionScheme<F>
 where
-    F: Field + Absorb,
+    F: ark_ff::PrimeField + Absorb,
 {
-    type Parameters = Parameters<F>;
+    type Parameters = PoseidonConfig<F>;
 
     type Randomness = Randomness<F>;
     type SymmetricKey = SymmetricKey<F>;
@@ -59,12 +60,12 @@ where
         k: Self::SymmetricKey,
         m: Self::Plaintext,
     ) -> Result<Self::Ciphertext, Error> {
-        let rc = params.clone();
+        let rc = params;
         let r = r.r;
         let k = k.k;
         let m = m.m;
 
-        let h = mimc7::MiMC::<F>::evaluate(&rc, [k, r].to_vec())?;
+        let h = PoseidonHash::<F>::evaluate(&rc, [k, r].as_ref())?;
         let c = h + m;
 
         Ok(Ciphertext { r, c })
@@ -75,11 +76,11 @@ where
         k: Self::SymmetricKey,
         ct: Self::Ciphertext,
     ) -> Result<Self::Plaintext, Error> {
-        let rc = params.clone();
-        let Ciphertext { r, c } = ct.clone();
+        let rc = params;
+        let Ciphertext { r, c } = ct;
         let k = k.k;
 
-        let h = mimc7::MiMC::<F>::evaluate(&rc, [k, r].to_vec())?;
+        let h = PoseidonHash::<F>::evaluate(&rc, [k, r].as_ref())?;
         let m = c - h;
 
         Ok(Plaintext { m })
@@ -88,13 +89,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use ark_bn254::Fr;
-    use ark_ff::Fp;
+    use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
 
     use crate::gadget::{
-        hashes::mimc7::{Parameters, parameters},
+        hashes::poseidon::arkworks_parameters::bn254::poseidon_parameter_bn254_2_to_1,
         symmetric_encrytions::SymmetricEncryption,
     };
 
@@ -102,12 +101,10 @@ mod tests {
 
     #[test]
     fn test_semmetic_encryption() {
-        let rc = Parameters {
-            round_constants: parameters::get_bn256_round_constants().clone(),
-        };
-        let r: Fr = Fp::from_str("3").unwrap();
-        let k: Fr = Fp::from_str("3").unwrap();
-        let m: Fr = Fp::from_str("5").unwrap();
+        let rc: PoseidonConfig<Fr> = poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into();
+        let r: Fr = Fr::from(3u64);
+        let k: Fr = Fr::from(3u64);
+        let m: Fr = Fr::from(5u64);
 
         let random = Randomness { r };
         let key = SymmetricKey { k };
@@ -125,5 +122,6 @@ mod tests {
 
         let m_dec = SymmetricEncryptionScheme::<Fr>::decrypt(rc, key, ct).unwrap();
         println!("m: {:?}", m_dec.m);
+        assert_eq!(msg, m_dec);
     }
 }

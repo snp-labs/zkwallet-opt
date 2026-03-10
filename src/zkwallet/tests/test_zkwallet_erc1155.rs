@@ -15,8 +15,7 @@ mod test {
 
     use crate::Error;
 
-    use crate::zkwallet::circuit::FieldMTConfig;
-    use crate::zkwallet::circuit::ZkWalletCircuit;
+    use crate::zkwallet::circuit::{FieldMTConfig, PoseidonConfigSet, ZkWalletCircuit};
 
     use crate::gadget::merkle_tree;
     use crate::gadget::merkle_tree::mocking::MockingMerkleTree;
@@ -29,13 +28,26 @@ mod test {
     use crate::gadget::public_encryptions::elgamal::ElGamal;
 
     use crate::gadget::hashes::CRHScheme;
-    use crate::gadget::hashes::mimc7;
+    use crate::gadget::hashes::poseidon;
+    use crate::gadget::hashes::poseidon::arkworks_parameters::bn254::{
+        poseidon_parameter_bn254_1_to_1, poseidon_parameter_bn254_2_to_1,
+        poseidon_parameter_bn254_4_to_1, poseidon_parameter_bn254_8_to_1,
+    };
 
     type C = ark_ed_on_bn254::EdwardsProjective;
     type GG = ark_ed_on_bn254::constraints::EdwardsVar;
 
     type F = ark_bn254::Fr;
-    type H = mimc7::MiMC<F>;
+    type H = poseidon::PoseidonHash<F>;
+
+    fn get_poseidon_config_set() -> PoseidonConfigSet<F> {
+        PoseidonConfigSet {
+            rc1: poseidon_parameter_bn254_1_to_1::get_poseidon_parameters().into(),
+            rc2: poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into(),
+            rc4: poseidon_parameter_bn254_4_to_1::get_poseidon_parameters().into(),
+            rc8: poseidon_parameter_bn254_8_to_1::get_poseidon_parameters().into(),
+        }
+    }
 
     #[allow(non_snake_case)]
     fn test_erc1155_input(
@@ -55,9 +67,7 @@ mod test {
 
         let mut rng = ark_std::rand::rngs::StdRng::seed_from_u64(test_rng().next_u64());
 
-        let rc: mimc7::Parameters<F> = mimc7::Parameters {
-            round_constants: mimc7::parameters::get_bn256_round_constants(),
-        };
+        let rc = get_poseidon_config_set();
 
         let elgamal_param: elgamal::Parameters<C> = elgamal::Parameters { generator };
 
@@ -85,21 +95,21 @@ mod test {
         let key = symmetric::SymmetricKey { k: sk };
 
         let cin0 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.clone(),
+            rc.rc2.clone(),
             random[0].clone(),
             key.clone(),
             symmetric::Plaintext { m: tk_addr },
         )
         .unwrap();
         let cin1 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.clone(),
+            rc.rc2.clone(),
             random[1].clone(),
             key.clone(),
             symmetric::Plaintext { m: tk_id },
         )
         .unwrap();
         let cin2 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.clone(),
+            rc.rc2.clone(),
             random[2].clone(),
             key.clone(),
             symmetric::Plaintext { m: v_ena_old },
@@ -113,21 +123,21 @@ mod test {
         };
 
         let cout0 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.clone(),
+            rc.rc2.clone(),
             random[0].clone(),
             key.clone(),
             symmetric::Plaintext { m: tk_addr },
         )
         .unwrap();
         let cout1 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.clone(),
+            rc.rc2.clone(),
             random[1].clone(),
             key.clone(),
             symmetric::Plaintext { m: tk_id },
         )
         .unwrap();
         let cout2 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.clone(),
+            rc.rc2.clone(),
             random[2].clone(),
             key.clone(),
             symmetric::Plaintext { m: v_ena_new },
@@ -143,22 +153,22 @@ mod test {
         let pk_enc_recv_point_x = F::from_bigint(pk_enc_recv_point_x.into_bigint()).unwrap();
         let pk_enc_recv_point_y = F::from_bigint(pk_enc_recv_point_y.into_bigint()).unwrap();
 
-        let k_b = H::evaluate(&rc.clone(), [sk].to_vec()).unwrap();
-        let k_b_ = H::evaluate(&rc.clone(), [F::rand(&mut rng)].to_vec()).unwrap();
+        let k_b = H::evaluate(&rc.rc1, [sk].as_ref()).unwrap();
+        let k_b_ = H::evaluate(&rc.rc1, [F::rand(&mut rng)].as_ref()).unwrap();
         let addr = H::evaluate(
-            &rc.clone(),
-            [k_b, pk_enc_send_point_x, pk_enc_send_point_y].to_vec(),
+            &rc.rc4,
+            [k_b, pk_enc_send_point_x, pk_enc_send_point_y].as_ref(),
         )
         .unwrap();
         let addr_r = H::evaluate(
-            &rc.clone(),
-            [k_b_, pk_enc_recv_point_x, pk_enc_recv_point_y].to_vec(),
+            &rc.rc4,
+            [k_b_, pk_enc_recv_point_x, pk_enc_recv_point_y].as_ref(),
         )
         .unwrap();
-        let cm = H::evaluate(&rc.clone(), [du, tk_addr, tk_id, dv, addr].to_vec()).unwrap();
-        let cm_ = H::evaluate(&rc.clone(), [du_, tk_addr, tk_id, dv_, addr_r].to_vec()).unwrap();
+        let cm = H::evaluate(&rc.rc8, [du, tk_addr, tk_id, dv, addr].as_ref()).unwrap();
+        let cm_ = H::evaluate(&rc.rc8, [du_, tk_addr, tk_id, dv_, addr_r].as_ref()).unwrap();
 
-        let sn = H::evaluate(&rc.clone(), [cm, sk].to_vec()).unwrap();
+        let sn = H::evaluate(&rc.rc2, [cm, sk].as_ref()).unwrap();
 
         let random = elgamal::Randomness(r);
         let (_, K_u) = ElGamal::encrypt(&elgamal_param, &k_u_, &k, &random).unwrap();
@@ -173,7 +183,7 @@ mod test {
                 r: F::from_bigint((i as u64).into()).unwrap(),
             };
             let c = symmetric::SymmetricEncryptionScheme::encrypt(
-                rc.clone(),
+                rc.rc2.clone(),
                 random,
                 k_point_x.clone(),
                 symmetric::Plaintext { m: *m },
@@ -184,8 +194,8 @@ mod test {
         });
 
         println!("generate mocking tree");
-        let leaf_crh_params = rc.clone();
-        let two_to_one_params = leaf_crh_params.clone();
+        let leaf_crh_params = rc.rc1.clone();
+        let two_to_one_params = rc.rc2.clone();
 
         let proof: merkle_tree::Path<FieldMTConfig<F>> =
             merkle_tree::mocking::get_mocking_merkle_tree(16);
@@ -204,7 +214,10 @@ mod test {
 
         Ok(ZkWalletCircuit {
             // constants
-            rc: rc.clone(),
+            rc1: rc.rc1,
+            rc2: rc.rc2,
+            rc4: rc.rc4,
+            rc8: rc.rc8,
             G: elgamal_param,
 
             // inputs
