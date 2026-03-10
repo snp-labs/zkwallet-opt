@@ -2,7 +2,7 @@ use crate::Error;
 use crate::gadget::hashes;
 use crate::gadget::hashes::constraints::CRHSchemeGadget;
 use crate::gadget::hashes::poseidon;
-use crate::gadget::hashes::poseidon::constraints::CRHGadget;
+use crate::gadget::hashes::poseidon::constraints::{CRHGadget};
 use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
 use std::ops::Not;
 
@@ -14,8 +14,9 @@ use crate::gadget::public_encryptions::AsymmetricEncryptionGadget;
 use crate::gadget::public_encryptions::elgamal;
 use crate::gadget::public_encryptions::elgamal::constraints::ElGamalEncGadget;
 
-use crate::gadget::merkle_tree;
-use crate::gadget::merkle_tree::{Config, IdentityDigestConverter, constraints::ConfigGadget};
+use crate::gadget::merkle_tree_n_ary;
+use crate::gadget::merkle_tree_n_ary::mocking::{get_mocking_merkle_tree, MockingMerkleTree};
+use crate::gadget::merkle_tree_n_ary::{Config, IdentityDigestConverter, constraints::ConfigGadget};
 
 use ark_crypto_primitives::sponge::Absorb;
 use ark_ec::CurveGroup;
@@ -24,6 +25,8 @@ use ark_r1cs_std::prelude::*;
 use ark_r1cs_std::{fields::fp::FpVar, prelude::AllocVar};
 use ark_relations::r1cs::{ConstraintSynthesizer, SynthesisError};
 use ark_std::marker::PhantomData;
+use ark_std::{One, UniformRand};
+use ark_ec::AffineRepr;
 
 use super::MockingCircuit;
 
@@ -76,7 +79,7 @@ where
     pub k: Option<elgamal::Plaintext<C>>,
     pub k_point_x: Option<symmetric::SymmetricKey<C::BaseField>>,
     pub leaf_pos: Option<u32>,
-    pub tree_proof: Option<merkle_tree::Path<FieldMTConfig<C::BaseField>>>,
+    pub tree_proof: Option<merkle_tree_n_ary::Path<8, FieldMTConfig<C::BaseField>>>,
     // directionSelector
     // intermediateHashWires
     pub _curve_var: PhantomData<GG>,
@@ -85,19 +88,19 @@ where
 pub struct FieldMTConfig<F: PrimeField> {
     _field: PhantomData<F>,
 }
-impl<F: PrimeField + Absorb> Config for FieldMTConfig<F> {
+impl<F: PrimeField + Absorb> Config<8> for FieldMTConfig<F> {
     type Leaf = [F];
     type LeafDigest = F;
     type LeafInnerDigestConverter = IdentityDigestConverter<F>;
     type InnerDigest = F;
     type LeafHash = poseidon::PoseidonHash<F>;
-    type TwoToOneHash = poseidon::TwoToOneCRH<F>;
+    type NToOneHash = poseidon::NToOneCRH<8, F>;
 }
 
 struct FieldMTConfigVar<F: PrimeField> {
     _field: PhantomData<F>,
 }
-impl<F> ConfigGadget<FieldMTConfig<F>, F> for FieldMTConfigVar<F>
+impl<F> ConfigGadget<8, FieldMTConfig<F>, F> for FieldMTConfigVar<F>
 where
     F: PrimeField + Absorb,
 {
@@ -106,7 +109,7 @@ where
     type LeafInnerConverter = IdentityDigestConverter<FpVar<F>>;
     type InnerDigest = FpVar<F>;
     type LeafHash = poseidon::constraints::CRHGadget<F>;
-    type TwoToOneHash = poseidon::constraints::TwoToOneCRHGadget<F>;
+    type NToOneHash = poseidon::constraints::NToOneCRHGadget<8, F>;
 }
 
 #[allow(non_snake_case)]
@@ -293,17 +296,14 @@ where
             ark_relations::ns!(cs, "k_point_x"),
             || self.k_point_x.ok_or(SynthesisError::AssignmentMissing),
         )?;
-        let mut cw = merkle_tree::constraints::PathVar::<
+        let cw = merkle_tree_n_ary::constraints::PathVar::<
+            8,
             FieldMTConfig<C::BaseField>,
             C::BaseField,
             FieldMTConfigVar<C::BaseField>,
         >::new_witness(ark_relations::ns!(cs, "cw"), || {
             self.tree_proof.ok_or(SynthesisError::AssignmentMissing)
         })?;
-        let leaf_pos = UInt32::new_witness(ark_relations::ns!(cs, "leaf_pos"), || {
-            self.leaf_pos.ok_or(SynthesisError::AssignmentMissing)
-        })?
-        .to_bits_le();
         /////////////////////////////////////////////////////////////////
 
         /////////////////////////////////////////////////////////////////
@@ -360,9 +360,7 @@ where
         // Allocate Leaf
         let leaf_g: Vec<_> = vec![cm];
 
-        cw.set_leaf_position(leaf_pos?);
-
-        let path_check = cw.verify_membership(&rc1.clone(), &rc2.clone(), &rt, &leaf_g)?;
+        let path_check = cw.verify_membership(&rc1, &rc8, &rt, &leaf_g)?;
 
         // if dv == 0 then do not check merkle tree
         let check_dv = dv.is_zero()?;
@@ -565,14 +563,9 @@ where
         rng: &mut R,
     ) -> Result<Self::Output, Error> {
         use crate::gadget::hashes::CRHScheme;
-        use crate::gadget::merkle_tree::mocking::MockingMerkleTree;
         use crate::gadget::public_encryptions::AsymmetricEncryptionScheme;
         use crate::gadget::public_encryptions::elgamal::ElGamal;
         use crate::gadget::symmetric_encrytions::SymmetricEncryption;
-
-        use ark_ec::AffineRepr;
-        use ark_std::One;
-        use ark_std::UniformRand;
 
         let generator = C::generator().into_affine();
         let rc1 = round_constants.rc1;
@@ -713,22 +706,10 @@ where
 
         println!("generate mocking tree");
         let leaf_crh_params = rc1.clone();
-        let two_to_one_params = rc2.clone();
+        let n_to_one_params = rc8.clone();
 
-        let proof: merkle_tree::Path<FieldMTConfig<Self::F>> =
-            merkle_tree::mocking::get_mocking_merkle_tree(tree_height);
-        let leaf: Self::F = cm;
-
-        let rt = proof
-            .get_test_root(&leaf_crh_params, &two_to_one_params, [leaf])
-            .unwrap();
-
-        let i: u32 = 0;
-        assert!(
-            proof
-                .verify(&leaf_crh_params, &two_to_one_params, &rt, [leaf])
-                .unwrap()
-        );
+        let mock_path = get_mocking_merkle_tree::<8, FieldMTConfig<Self::F>, Self::F>(tree_height);
+        let (proof, rt) = mock_path.get_test_path(&leaf_crh_params, &n_to_one_params, [cm].as_ref())?;
 
         Ok(ZkWalletCircuit {
             // constants
@@ -776,7 +757,7 @@ where
             r: Some(random),
             k: Some(k),
             k_point_x: Some(k_point_x),
-            leaf_pos: Some(i),
+            leaf_pos: Some(0),
             tree_proof: Some(proof),
             _curve_var: std::marker::PhantomData,
         })

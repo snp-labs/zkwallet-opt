@@ -61,7 +61,7 @@ mod test {
 
         let test_input =
             <ZkWalletCircuit<C, GG> as zkwallet::MockingCircuit<C, GG>>::generate_circuit(
-                rc, 32, &mut rng,
+                rc, 11, &mut rng,
             )
             .unwrap();
 
@@ -69,6 +69,7 @@ mod test {
 
         test_input.clone().generate_constraints(cs.clone()).unwrap();
         assert!(cs.is_satisfied().unwrap());
+        println!("Number of constraints: {}", cs.num_constraints());
     }
 
     #[test]
@@ -79,7 +80,7 @@ mod test {
 
         let test_input =
             <ZkWalletCircuit<C, GG> as zkwallet::MockingCircuit<C, GG>>::generate_circuit(
-                rc, 32, &mut rng,
+                rc, 11, &mut rng,
             )
             .unwrap();
 

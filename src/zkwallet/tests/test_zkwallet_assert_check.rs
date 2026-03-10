@@ -54,7 +54,7 @@ mod test {
 
         let mut test_input =
             <ZkWalletCircuit<C, GG> as zkwallet::MockingCircuit<C, GG>>::generate_circuit(
-                rc, 32, &mut rng,
+                rc, 11, &mut rng,
             )
             .unwrap();
 
@@ -77,7 +77,7 @@ mod test {
 
         let mut test_input =
             <ZkWalletCircuit<C, GG> as zkwallet::MockingCircuit<C, GG>>::generate_circuit(
-                rc, 32, &mut rng,
+                rc, 11, &mut rng,
             )
             .unwrap();
 

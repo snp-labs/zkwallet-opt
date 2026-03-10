@@ -41,6 +41,7 @@ use ark_std::vec::Vec;
 use derivative::Derivative;
 
 pub mod constraints;
+pub mod mocking;
 
 pub use crate::{
     Error,

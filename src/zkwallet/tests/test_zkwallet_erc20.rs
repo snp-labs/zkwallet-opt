@@ -17,8 +17,7 @@ mod test {
 
     use crate::zkwallet::circuit::{FieldMTConfig, PoseidonConfigSet, ZkWalletCircuit};
 
-    use crate::gadget::merkle_tree;
-    use crate::gadget::merkle_tree::mocking::MockingMerkleTree;
+    use crate::gadget::merkle_tree_n_ary::mocking::{get_mocking_merkle_tree, MockingMerkleTree};
 
     use crate::gadget::symmetric_encrytions::SymmetricEncryption;
     use crate::gadget::symmetric_encrytions::symmetric;
@@ -194,23 +193,8 @@ mod test {
         });
 
         println!("generate mocking tree");
-        let leaf_crh_params = rc.rc1.clone();
-        let two_to_one_params = rc.rc2.clone();
-
-        let proof: merkle_tree::Path<FieldMTConfig<F>> =
-            merkle_tree::mocking::get_mocking_merkle_tree(16);
-        let leaf: F = cm;
-
-        let rt = proof
-            .get_test_root(&leaf_crh_params, &two_to_one_params, [leaf])
-            .unwrap();
-
-        let i: u32 = 0;
-        assert!(
-            proof
-                .verify(&leaf_crh_params, &two_to_one_params, &rt, [leaf])
-                .unwrap()
-        );
+        let mock_path = get_mocking_merkle_tree::<8, FieldMTConfig<F>, F>(11);
+        let (valid_proof, rt) = mock_path.get_test_path(&rc.rc1, &rc.rc8, [cm].as_ref()).unwrap();
 
         Ok(ZkWalletCircuit {
             // constants
@@ -258,8 +242,8 @@ mod test {
             r: Some(random),
             k: Some(k),
             k_point_x: Some(k_point_x),
-            leaf_pos: Some(i),
-            tree_proof: Some(proof),
+            leaf_pos: Some(0),
+            tree_proof: Some(valid_proof),
             _curve_var: std::marker::PhantomData,
         })
     }
