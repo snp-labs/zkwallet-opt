@@ -44,10 +44,10 @@ mod test {
 
     fn get_poseidon_config_set() -> PoseidonConfigSet<F> {
         PoseidonConfigSet {
-            rc1: poseidon_parameter_bn254_1_to_1::get_poseidon_parameters().into(),
-            rc2: poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into(),
-            rc4: poseidon_parameter_bn254_4_to_1::get_poseidon_parameters().into(),
-            rc8: poseidon_parameter_bn254_8_to_1::get_poseidon_parameters().into(),
+            poseidon_pp_1: poseidon_parameter_bn254_1_to_1::get_poseidon_parameters().into(),
+            poseidon_pp_2: poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into(),
+            poseidon_pp_4: poseidon_parameter_bn254_4_to_1::get_poseidon_parameters().into(),
+            poseidon_pp_8: poseidon_parameter_bn254_8_to_1::get_poseidon_parameters().into(),
         }
     }
 
@@ -57,11 +57,11 @@ mod test {
 
         let mut rng = ark_std::rand::rngs::StdRng::seed_from_u64(test_rng().next_u64());
 
-        let rc = get_poseidon_config_set();
+        let hash_param = get_poseidon_config_set();
 
         let test_input =
             <ZkWalletCircuit<C, GG> as zkwallet::MockingCircuit<C, GG>>::generate_circuit(
-                rc, 11, &mut rng,
+                hash_param, 11, &mut rng,
             )
             .unwrap();
 
@@ -76,11 +76,11 @@ mod test {
     fn test_zkwallet_circuit_groth16() {
         let mut rng = ark_std::rand::rngs::StdRng::seed_from_u64(test_rng().next_u64());
         println!("Generate ZkWallet test input!");
-        let rc = get_poseidon_config_set();
+        let hash_param = get_poseidon_config_set();
 
         let test_input =
             <ZkWalletCircuit<C, GG> as zkwallet::MockingCircuit<C, GG>>::generate_circuit(
-                rc, 11, &mut rng,
+                hash_param, 11, &mut rng,
             )
             .unwrap();
 

@@ -49,7 +49,7 @@ impl<const N: usize, P: Config<N>> MockingMerkleTree<N, P> for Path<N, P> {
         let mut index = self.leaf_index / N;
         for i in (0..auth_path.len()).rev() {
             auth_path[i][index % N] = curr_hash.clone();
-            
+
             // Update curr_hash by hashing the N inputs of this level
             curr_hash = P::NToOneHash::compress(n_to_one_params, &auth_path[i])?;
             index /= N;
@@ -65,7 +65,11 @@ impl<const N: usize, P: Config<N>> MockingMerkleTree<N, P> for Path<N, P> {
     }
 }
 
-pub fn get_mocking_merkle_tree<const N: usize, T: Config<N, LeafDigest = F, InnerDigest = F>, F: PrimeField>(
+pub fn get_mocking_merkle_tree<
+    const N: usize,
+    T: Config<N, LeafDigest = F, InnerDigest = F>,
+    F: PrimeField,
+>(
     tree_height: u64,
 ) -> Path<N, T> {
     let auth_path_len = tree_height as usize - 2;
@@ -85,8 +89,8 @@ pub fn get_mocking_merkle_tree<const N: usize, T: Config<N, LeafDigest = F, Inne
 mod tests {
     use super::*;
     use crate::gadget::hashes::poseidon;
-    use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
     use crate::gadget::merkle_tree::IdentityDigestConverter;
+    use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
     use ark_std::{UniformRand, Zero, test_rng};
 
     type F = ark_bn254::Fr;
@@ -108,7 +112,11 @@ mod tests {
         let tree_height: u64 = 5;
         let path: Path<4, FieldMTConfig<4>> = get_mocking_merkle_tree(tree_height);
         assert_eq!(path.auth_path.len(), (tree_height - 2) as usize);
-        assert!(path.auth_path.iter().all(|layer| layer.iter().all(|&x| x == F::zero())));
+        assert!(
+            path.auth_path
+                .iter()
+                .all(|layer| layer.iter().all(|&x| x == F::zero()))
+        );
     }
 
     #[test]
@@ -118,10 +126,11 @@ mod tests {
         let mut rng = test_rng();
         let tree_height: u64 = 5;
         let leaf: F = F::rand(&mut rng);
-        let params: PoseidonConfig<F> = poseidon_parameter_bn254_4_to_1::get_poseidon_parameters().into();
+        let params: PoseidonConfig<F> =
+            poseidon_parameter_bn254_4_to_1::get_poseidon_parameters().into();
         let leaf_hash_params = params.clone();
         let n_to_one_params = params;
-        
+
         let mut mock_path: Path<4, FieldMTConfig<4>> = get_mocking_merkle_tree(tree_height);
         mock_path.leaf_index = 42; // arbitrary index
 

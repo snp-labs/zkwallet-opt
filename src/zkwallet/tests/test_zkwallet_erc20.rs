@@ -17,7 +17,7 @@ mod test {
 
     use crate::zkwallet::circuit::{FieldMTConfig, PoseidonConfigSet, ZkWalletCircuit};
 
-    use crate::gadget::merkle_tree_n_ary::mocking::{get_mocking_merkle_tree, MockingMerkleTree};
+    use crate::gadget::merkle_tree_n_ary::mocking::{MockingMerkleTree, get_mocking_merkle_tree};
 
     use crate::gadget::symmetric_encrytions::SymmetricEncryption;
     use crate::gadget::symmetric_encrytions::symmetric;
@@ -41,10 +41,10 @@ mod test {
 
     fn get_poseidon_config_set() -> PoseidonConfigSet<F> {
         PoseidonConfigSet {
-            rc1: poseidon_parameter_bn254_1_to_1::get_poseidon_parameters().into(),
-            rc2: poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into(),
-            rc4: poseidon_parameter_bn254_4_to_1::get_poseidon_parameters().into(),
-            rc8: poseidon_parameter_bn254_8_to_1::get_poseidon_parameters().into(),
+            poseidon_pp_1: poseidon_parameter_bn254_1_to_1::get_poseidon_parameters().into(),
+            poseidon_pp_2: poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into(),
+            poseidon_pp_4: poseidon_parameter_bn254_4_to_1::get_poseidon_parameters().into(),
+            poseidon_pp_8: poseidon_parameter_bn254_8_to_1::get_poseidon_parameters().into(),
         }
     }
 
@@ -66,7 +66,7 @@ mod test {
 
         let mut rng = ark_std::rand::rngs::StdRng::seed_from_u64(test_rng().next_u64());
 
-        let rc = get_poseidon_config_set();
+        let hash_param = get_poseidon_config_set();
 
         let elgamal_param: elgamal::Parameters<C> = elgamal::Parameters { generator };
 
@@ -94,21 +94,21 @@ mod test {
         let key = symmetric::SymmetricKey { k: sk };
 
         let cin0 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.rc2.clone(),
+            hash_param.poseidon_pp_2.clone(),
             random[0].clone(),
             key.clone(),
             symmetric::Plaintext { m: tk_addr },
         )
         .unwrap();
         let cin1 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.rc2.clone(),
+            hash_param.poseidon_pp_2.clone(),
             random[1].clone(),
             key.clone(),
             symmetric::Plaintext { m: tk_id },
         )
         .unwrap();
         let cin2 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.rc2.clone(),
+            hash_param.poseidon_pp_2.clone(),
             random[2].clone(),
             key.clone(),
             symmetric::Plaintext { m: v_ena_old },
@@ -122,21 +122,21 @@ mod test {
         };
 
         let cout0 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.rc2.clone(),
+            hash_param.poseidon_pp_2.clone(),
             random[0].clone(),
             key.clone(),
             symmetric::Plaintext { m: tk_addr },
         )
         .unwrap();
         let cout1 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.rc2.clone(),
+            hash_param.poseidon_pp_2.clone(),
             random[1].clone(),
             key.clone(),
             symmetric::Plaintext { m: tk_id },
         )
         .unwrap();
         let cout2 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.rc2.clone(),
+            hash_param.poseidon_pp_2.clone(),
             random[2].clone(),
             key.clone(),
             symmetric::Plaintext { m: v_ena_new },
@@ -152,22 +152,30 @@ mod test {
         let pk_enc_recv_point_x = F::from_bigint(pk_enc_recv_point_x.into_bigint()).unwrap();
         let pk_enc_recv_point_y = F::from_bigint(pk_enc_recv_point_y.into_bigint()).unwrap();
 
-        let k_b = H::evaluate(&rc.rc1, [sk].as_ref()).unwrap();
-        let k_b_ = H::evaluate(&rc.rc1, [F::rand(&mut rng)].as_ref()).unwrap();
+        let k_b = H::evaluate(&hash_param.poseidon_pp_1, [sk].as_ref()).unwrap();
+        let k_b_ = H::evaluate(&hash_param.poseidon_pp_1, [F::rand(&mut rng)].as_ref()).unwrap();
         let addr = H::evaluate(
-            &rc.rc4,
+            &hash_param.poseidon_pp_4,
             [k_b, pk_enc_send_point_x, pk_enc_send_point_y].as_ref(),
         )
         .unwrap();
         let addr_r = H::evaluate(
-            &rc.rc4,
+            &hash_param.poseidon_pp_4,
             [k_b_, pk_enc_recv_point_x, pk_enc_recv_point_y].as_ref(),
         )
         .unwrap();
-        let cm = H::evaluate(&rc.rc8, [du, tk_addr, tk_id, dv, addr].as_ref()).unwrap();
-        let cm_ = H::evaluate(&rc.rc8, [du_, tk_addr, tk_id, dv_, addr_r].as_ref()).unwrap();
+        let cm = H::evaluate(
+            &hash_param.poseidon_pp_8,
+            [du, tk_addr, tk_id, dv, addr].as_ref(),
+        )
+        .unwrap();
+        let cm_ = H::evaluate(
+            &hash_param.poseidon_pp_8,
+            [du_, tk_addr, tk_id, dv_, addr_r].as_ref(),
+        )
+        .unwrap();
 
-        let sn = H::evaluate(&rc.rc2, [cm, sk].as_ref()).unwrap();
+        let sn = H::evaluate(&hash_param.poseidon_pp_2, [cm, sk].as_ref()).unwrap();
 
         let random = elgamal::Randomness(r);
         let (_, K_u) = ElGamal::encrypt(&elgamal_param, &k_u_, &k, &random).unwrap();
@@ -182,7 +190,7 @@ mod test {
                 r: F::from_bigint((i as u64).into()).unwrap(),
             };
             let c = symmetric::SymmetricEncryptionScheme::encrypt(
-                rc.rc2.clone(),
+                hash_param.poseidon_pp_2.clone(),
                 random,
                 k_point_x.clone(),
                 symmetric::Plaintext { m: *m },
@@ -194,14 +202,20 @@ mod test {
 
         println!("generate mocking tree");
         let mock_path = get_mocking_merkle_tree::<8, FieldMTConfig<F>, F>(11);
-        let (valid_proof, rt) = mock_path.get_test_path(&rc.rc1, &rc.rc8, [cm].as_ref()).unwrap();
+        let (valid_proof, rt) = mock_path
+            .get_test_path(
+                &hash_param.poseidon_pp_1,
+                &hash_param.poseidon_pp_8,
+                [cm].as_ref(),
+            )
+            .unwrap();
 
         Ok(ZkWalletCircuit {
             // constants
-            rc1: rc.rc1,
-            rc2: rc.rc2,
-            rc4: rc.rc4,
-            rc8: rc.rc8,
+            poseidon_pp_1: hash_param.poseidon_pp_1,
+            poseidon_pp_2: hash_param.poseidon_pp_2,
+            poseidon_pp_4: hash_param.poseidon_pp_4,
+            poseidon_pp_8: hash_param.poseidon_pp_8,
             G: elgamal_param,
 
             // inputs

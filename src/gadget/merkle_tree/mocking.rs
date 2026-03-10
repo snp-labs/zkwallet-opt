@@ -127,7 +127,8 @@ mod tests {
         let mut rng = test_rng();
         let tree_height: u64 = 5;
         let leaf: F = F::rand(&mut rng);
-        let params: PoseidonConfig<F> = poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into();
+        let params: PoseidonConfig<F> =
+            poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into();
         let leaf_hash_params = params.clone();
         let two_to_one_params = params;
         let path: Path<FieldMTConfig> = get_mocking_merkle_tree(tree_height);

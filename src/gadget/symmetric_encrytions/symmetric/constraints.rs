@@ -11,7 +11,7 @@ use super::{Ciphertext, Plaintext, Randomness, SymmetricEncryptionScheme, Symmet
 use crate::gadget::{
     hashes::{
         constraints::CRHSchemeGadget,
-        poseidon::constraints::{CRHParametersVar, CRHGadget},
+        poseidon::constraints::{CRHGadget, CRHParametersVar},
     },
     symmetric_encrytions::constraints::SymmetricEncryptionGadget,
 };
@@ -213,7 +213,8 @@ mod tests {
         type MyEnc = SymmetricEncryptionScheme<Fr>;
         type MyGadget = SymmetricEncryptionSchemeGadget<Fr>;
 
-        let rc: PoseidonConfig<Fr> = poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into();
+        let hash_param: PoseidonConfig<Fr> =
+            poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into();
         let r: Fr = Fr::from(3u64);
         let k: Fr = Fr::from(3u64);
         let m: Fr = Fr::from(5u64);
@@ -223,7 +224,7 @@ mod tests {
         let msg = Plaintext { m };
 
         let ct = SymmetricEncryptionScheme::<Fr>::encrypt(
-            rc.clone(),
+            hash_param.clone(),
             random.clone(),
             key.clone(),
             msg.clone(),
@@ -232,7 +233,8 @@ mod tests {
         println!("ct: {:?}", ct.c);
 
         let m_dec =
-            SymmetricEncryptionScheme::<Fr>::decrypt(rc.clone(), key.clone(), ct.clone()).unwrap();
+            SymmetricEncryptionScheme::<Fr>::decrypt(hash_param.clone(), key.clone(), ct.clone())
+                .unwrap();
         println!("m: {:?}", m_dec.m);
 
         let cs = ConstraintSystem::<Fr>::new_ref();
@@ -258,11 +260,12 @@ mod tests {
             )
             .unwrap();
 
-        let param_var =
-            CRHParametersVar::<Fr>::new_constant(ark_relations::ns!(cs, "gadget_const"), &rc)
-                .unwrap();
-        let result_var =
-            MyGadget::encrypt(param_var, randomness_var, key_var, msg_var).unwrap();
+        let param_var = CRHParametersVar::<Fr>::new_constant(
+            ark_relations::ns!(cs, "gadget_const"),
+            &hash_param,
+        )
+        .unwrap();
+        let result_var = MyGadget::encrypt(param_var, randomness_var, key_var, msg_var).unwrap();
 
         let expected_var =
             <MyGadget as SymmetricEncryptionGadget<MyEnc, Fr>>::CiphertextVar::new_input(

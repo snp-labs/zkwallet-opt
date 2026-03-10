@@ -7,10 +7,7 @@ use std::marker::PhantomData;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
 use super::SymmetricEncryption;
-use crate::gadget::hashes::{
-    CRHScheme,
-    poseidon::PoseidonHash,
-};
+use crate::gadget::hashes::{CRHScheme, poseidon::PoseidonHash};
 
 pub mod constraints;
 
@@ -60,12 +57,12 @@ where
         k: Self::SymmetricKey,
         m: Self::Plaintext,
     ) -> Result<Self::Ciphertext, Error> {
-        let rc = params;
+        let hash_param = params;
         let r = r.r;
         let k = k.k;
         let m = m.m;
 
-        let h = PoseidonHash::<F>::evaluate(&rc, [k, r].as_ref())?;
+        let h = PoseidonHash::<F>::evaluate(&hash_param, [k, r].as_ref())?;
         let c = h + m;
 
         Ok(Ciphertext { r, c })
@@ -76,11 +73,11 @@ where
         k: Self::SymmetricKey,
         ct: Self::Ciphertext,
     ) -> Result<Self::Plaintext, Error> {
-        let rc = params;
+        let hash_param = params;
         let Ciphertext { r, c } = ct;
         let k = k.k;
 
-        let h = PoseidonHash::<F>::evaluate(&rc, [k, r].as_ref())?;
+        let h = PoseidonHash::<F>::evaluate(&hash_param, [k, r].as_ref())?;
         let m = c - h;
 
         Ok(Plaintext { m })
@@ -101,7 +98,8 @@ mod tests {
 
     #[test]
     fn test_semmetic_encryption() {
-        let rc: PoseidonConfig<Fr> = poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into();
+        let hash_param: PoseidonConfig<Fr> =
+            poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into();
         let r: Fr = Fr::from(3u64);
         let k: Fr = Fr::from(3u64);
         let m: Fr = Fr::from(5u64);
@@ -111,7 +109,7 @@ mod tests {
         let msg = Plaintext { m };
 
         let ct = SymmetricEncryptionScheme::<Fr>::encrypt(
-            rc.clone(),
+            hash_param.clone(),
             random.clone(),
             key.clone(),
             msg.clone(),
@@ -120,7 +118,7 @@ mod tests {
 
         println!("ct: {:?}", ct.c);
 
-        let m_dec = SymmetricEncryptionScheme::<Fr>::decrypt(rc, key, ct).unwrap();
+        let m_dec = SymmetricEncryptionScheme::<Fr>::decrypt(hash_param, key, ct).unwrap();
         println!("m: {:?}", m_dec.m);
         assert_eq!(msg, m_dec);
     }
