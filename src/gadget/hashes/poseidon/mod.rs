@@ -6,8 +6,8 @@ use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{borrow::Borrow, marker::PhantomData};
 
-use crate::gadget::hashes::{CRHScheme, TwoToOneCRHScheme};
 use crate::Error;
+use crate::gadget::hashes::{CRHScheme, TwoToOneCRHScheme};
 
 // #[cfg(feature = "r1cs")]
 // pub mod constraints;

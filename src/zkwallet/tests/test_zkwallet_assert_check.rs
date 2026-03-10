@@ -1,10 +1,10 @@
 mod test {
     use ark_ff::PrimeField;
 
+    use ark_std::Zero;
     use ark_std::rand::RngCore;
     use ark_std::rand::SeedableRng;
     use ark_std::test_rng;
-    use ark_std::Zero;
 
     use crate::zkwallet;
     use crate::zkwallet::circuit::ZkWalletCircuit;

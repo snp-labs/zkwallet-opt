@@ -128,8 +128,8 @@ mod test {
     use ark_ff::PrimeField;
 
     use crate::gadget::hashes::{
-        mimc7::{self, parameters},
         CRHScheme, TwoToOneCRHScheme,
+        mimc7::{self, parameters},
     };
 
     use super::Parameters;

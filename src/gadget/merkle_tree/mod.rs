@@ -1,9 +1,9 @@
 #![allow(clippy::needless_range_loop)]
 
+use crate::Error;
 use crate::gadget::hashes::CRHScheme;
 /// Defines a trait to chain two types of CRHs.
 use crate::gadget::hashes::TwoToOneCRHScheme;
-use crate::Error;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::borrow::Borrow;
 use ark_std::hash::Hash;
@@ -54,7 +54,7 @@ impl<T: CanonicalSerialize> DigestConverter<T, [u8]> for ByteDigestConverter<T> 
 /// * `TwoHashesToOneHash`: Compress two inner digests to one inner digest
 pub trait Config {
     type Leaf: ?Sized; // merkle tree does not store the leaf
-                       // leaf layer
+    // leaf layer
     type LeafDigest: Clone
         + Eq
         + core::fmt::Debug
@@ -63,10 +63,7 @@ pub trait Config {
         + CanonicalSerialize
         + CanonicalDeserialize;
     // transition between leaf layer to inner layer
-    type LeafInnerDigestConverter: DigestConverter<
-        Self::LeafDigest,
-        <Self::TwoToOneHash as TwoToOneCRHScheme>::Input,
-    >;
+    type LeafInnerDigestConverter: DigestConverter<Self::LeafDigest, <Self::TwoToOneHash as TwoToOneCRHScheme>::Input>;
     // inner layer
     type InnerDigest: Clone
         + Eq

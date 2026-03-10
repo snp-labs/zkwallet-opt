@@ -141,20 +141,20 @@ mod tests {
     use ark_bn254::Fr;
     use ark_ff::PrimeField;
     use ark_r1cs_std::{
+        R1CSVar,
         fields::fp::FpVar,
         prelude::{AllocVar, EqGadget},
-        R1CSVar,
     };
     use ark_relations::r1cs::ConstraintSystem;
     use std::time::Instant;
 
     use crate::gadget::hashes::{
+        CRHScheme, TwoToOneCRHScheme,
         mimc7::{
             self,
             constraints::{MiMCGadget, ParametersVar, TwoToOneMiMCGadget},
             parameters,
         },
-        CRHScheme, TwoToOneCRHScheme,
     };
 
     use super::Parameters;

@@ -194,16 +194,16 @@ mod tests {
 
     use ark_bn254::Fr;
     use ark_ff::Fp;
+    use ark_r1cs_std::R1CSVar;
     use ark_r1cs_std::alloc::AllocVar;
     use ark_r1cs_std::eq::EqGadget;
-    use ark_r1cs_std::R1CSVar;
     use ark_relations::r1cs::ConstraintSystem;
 
     use crate::gadget::{
-        hashes::mimc7::{constraints::ParametersVar, parameters, Parameters},
+        hashes::mimc7::{Parameters, constraints::ParametersVar, parameters},
         symmetric_encrytions::{
-            constraints::SymmetricEncryptionGadget,
-            symmetric::constraints::SymmetricEncryptionSchemeGadget, SymmetricEncryption,
+            SymmetricEncryption, constraints::SymmetricEncryptionGadget,
+            symmetric::constraints::SymmetricEncryptionSchemeGadget,
         },
     };
 

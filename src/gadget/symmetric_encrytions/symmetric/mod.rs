@@ -7,8 +7,8 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
 use super::SymmetricEncryption;
 use crate::gadget::hashes::{
-    mimc7::{self, Parameters},
     CRHScheme,
+    mimc7::{self, Parameters},
 };
 
 pub mod constraints;
@@ -94,7 +94,7 @@ mod tests {
     use ark_ff::Fp;
 
     use crate::gadget::{
-        hashes::mimc7::{parameters, Parameters},
+        hashes::mimc7::{Parameters, parameters},
         symmetric_encrytions::SymmetricEncryption,
     };
 

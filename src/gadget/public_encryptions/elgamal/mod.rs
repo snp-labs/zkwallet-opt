@@ -1,9 +1,9 @@
 pub mod constraints;
 
-use crate::gadget::public_encryptions::AsymmetricEncryptionScheme;
 use crate::Error;
+use crate::gadget::public_encryptions::AsymmetricEncryptionScheme;
 use ark_ec::{CurveGroup, PrimeGroup};
-use ark_ff::{fields::PrimeField, UniformRand};
+use ark_ff::{UniformRand, fields::PrimeField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::marker::PhantomData;
 use ark_std::ops::Mul;
@@ -118,12 +118,12 @@ where
 
 #[cfg(test)]
 mod test {
-    use ark_std::{test_rng, UniformRand};
+    use ark_std::{UniformRand, test_rng};
 
     use ark_ed_on_bls12_381::EdwardsProjective as JubJub;
 
-    use crate::gadget::public_encryptions::elgamal::{ElGamal, Randomness};
     use crate::gadget::public_encryptions::AsymmetricEncryptionScheme;
+    use crate::gadget::public_encryptions::elgamal::{ElGamal, Randomness};
 
     #[test]
     fn test_elgamal_encryption() {

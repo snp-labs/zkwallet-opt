@@ -1,18 +1,18 @@
-use ark_crypto_primitives::sponge::constraints::CryptographicSpongeVar;
-use ark_crypto_primitives::sponge::poseidon::constraints::PoseidonSpongeVar;
-use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
 use ark_crypto_primitives::sponge::Absorb;
+use ark_crypto_primitives::sponge::constraints::CryptographicSpongeVar;
+use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
+use ark_crypto_primitives::sponge::poseidon::constraints::PoseidonSpongeVar;
 use ark_ff::PrimeField;
 use ark_r1cs_std::{
+    R1CSVar,
     alloc::{AllocVar, AllocationMode},
     fields::fp::FpVar,
-    R1CSVar,
 };
 use ark_relations::r1cs::{Namespace, SynthesisError};
 
+use crate::gadget::hashes::CRHScheme;
 use crate::gadget::hashes::constraints::{CRHSchemeGadget, TwoToOneCRHSchemeGadget};
 use crate::gadget::hashes::poseidon::{PoseidonHash, TwoToOneCRH};
-use crate::gadget::hashes::CRHScheme;
 #[cfg(not(feature = "std"))]
 use ark_std::vec::Vec;
 use ark_std::{borrow::Borrow, marker::PhantomData};
@@ -122,8 +122,8 @@ mod test {
     use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
     use ark_r1cs_std::alloc::AllocVar;
     use ark_r1cs_std::{
-        fields::fp::{AllocatedFp, FpVar},
         R1CSVar,
+        fields::fp::{AllocatedFp, FpVar},
     };
     use ark_relations::r1cs::ConstraintSystem;
     use ark_std::UniformRand;

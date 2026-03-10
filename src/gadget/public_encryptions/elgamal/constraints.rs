@@ -2,14 +2,14 @@ use ark_r1cs_std::prelude::*;
 use ark_relations::r1cs::{Namespace, SynthesisError};
 use derivative::Derivative;
 
+use crate::gadget::public_encryptions::AsymmetricEncryptionGadget;
 use crate::gadget::public_encryptions::elgamal::{
     Ciphertext, ElGamal, Parameters, Plaintext, PublicKey, Randomness,
 };
-use crate::gadget::public_encryptions::AsymmetricEncryptionGadget;
 use ark_ec::CurveGroup;
 use ark_ff::{
-    fields::{Field, PrimeField},
     Zero,
+    fields::{Field, PrimeField},
 };
 use ark_serialize::CanonicalSerialize;
 use ark_std::{borrow::Borrow, marker::PhantomData, vec::Vec};
@@ -238,14 +238,14 @@ where
 #[cfg(test)]
 mod test {
     use crate::gadget::public_encryptions::constraints::AsymmetricEncryptionGadget;
-    use ark_std::{test_rng, UniformRand};
+    use ark_std::{UniformRand, test_rng};
 
-    use ark_ed_on_bls12_381::{constraints::EdwardsVar, EdwardsProjective as JubJub, Fq};
+    use ark_ed_on_bls12_381::{EdwardsProjective as JubJub, Fq, constraints::EdwardsVar};
 
-    use crate::gadget::public_encryptions::elgamal::{
-        constraints::ElGamalEncGadget, ElGamal, Randomness,
-    };
     use crate::gadget::public_encryptions::AsymmetricEncryptionScheme;
+    use crate::gadget::public_encryptions::elgamal::{
+        ElGamal, Randomness, constraints::ElGamalEncGadget,
+    };
     use ark_r1cs_std::prelude::*;
     use ark_relations::r1cs::ConstraintSystem;
 

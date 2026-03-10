@@ -4,9 +4,9 @@ use ark_std::vec;
 use ark_std::vec::Vec;
 
 // External crates
+use crate::Error;
 use crate::gadget::hashes::{CRHScheme, TwoToOneCRHScheme};
 use crate::gadget::merkle_tree::{Config, DigestConverter, LeafParam, Path, TwoToOneParam};
-use crate::Error;
 
 pub trait MockingMerkleTree<P: Config> {
     fn get_test_root<L: Borrow<P::Leaf>>(
@@ -95,7 +95,7 @@ mod tests {
 
     use crate::gadget::merkle_tree::{Config, IdentityDigestConverter};
 
-    use ark_std::{test_rng, UniformRand, Zero};
+    use ark_std::{UniformRand, Zero, test_rng};
 
     type F = ark_bn254::Fr;
     type H = mimc7::MiMC<F>;
@@ -132,8 +132,9 @@ mod tests {
             .get_test_root(&leaf_hash_params, &two_to_one_params, [leaf].borrow())
             .unwrap();
 
-        assert!(path
-            .verify(&leaf_hash_params, &two_to_one_params, &rt, [leaf])
-            .unwrap());
+        assert!(
+            path.verify(&leaf_hash_params, &two_to_one_params, &rt, [leaf])
+                .unwrap()
+        );
     }
 }

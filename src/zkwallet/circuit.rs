@@ -1,20 +1,20 @@
+use crate::Error;
 use crate::gadget::hashes;
 use crate::gadget::hashes::constraints::CRHSchemeGadget;
 use crate::gadget::hashes::mimc7;
 use crate::gadget::hashes::mimc7::constraints::MiMCGadget;
-use crate::Error;
 use std::ops::Not;
 
 use crate::gadget::symmetric_encrytions::constraints::SymmetricEncryptionGadget;
 use crate::gadget::symmetric_encrytions::symmetric;
 use crate::gadget::symmetric_encrytions::symmetric::constraints::SymmetricEncryptionSchemeGadget;
 
+use crate::gadget::public_encryptions::AsymmetricEncryptionGadget;
 use crate::gadget::public_encryptions::elgamal;
 use crate::gadget::public_encryptions::elgamal::constraints::ElGamalEncGadget;
-use crate::gadget::public_encryptions::AsymmetricEncryptionGadget;
 
 use crate::gadget::merkle_tree;
-use crate::gadget::merkle_tree::{constraints::ConfigGadget, Config, IdentityDigestConverter};
+use crate::gadget::merkle_tree::{Config, IdentityDigestConverter, constraints::ConfigGadget};
 
 use ark_crypto_primitives::sponge::Absorb;
 use ark_ec::CurveGroup;
@@ -500,7 +500,8 @@ where
         /////////////////////////////////////////////////////////////////
         // pv pv_ dv dv_ range check
         let MODULUS_BIT_SIZE_MINUS_ONE = (C::BaseField::MODULUS_BIT_SIZE - 1) as usize;
-        let _ = (result_v_in_ena_old.m * is_cin).to_bits_le_with_top_bits_zero(MODULUS_BIT_SIZE_MINUS_ONE)?;
+        let _ = (result_v_in_ena_old.m * is_cin)
+            .to_bits_le_with_top_bits_zero(MODULUS_BIT_SIZE_MINUS_ONE)?;
         let _ = pv.to_bits_le_with_top_bits_zero(MODULUS_BIT_SIZE_MINUS_ONE)?;
         let _ = pv_.to_bits_le_with_top_bits_zero(MODULUS_BIT_SIZE_MINUS_ONE)?;
         let _ = dv.to_bits_le_with_top_bits_zero(MODULUS_BIT_SIZE_MINUS_ONE)?;
@@ -531,8 +532,8 @@ where
     ) -> Result<Self::Output, Error> {
         use crate::gadget::hashes::CRHScheme;
         use crate::gadget::merkle_tree::mocking::MockingMerkleTree;
-        use crate::gadget::public_encryptions::elgamal::ElGamal;
         use crate::gadget::public_encryptions::AsymmetricEncryptionScheme;
+        use crate::gadget::public_encryptions::elgamal::ElGamal;
         use crate::gadget::symmetric_encrytions::SymmetricEncryption;
 
         use ark_ec::AffineRepr;
@@ -686,9 +687,11 @@ where
             .unwrap();
 
         let i: u32 = 0;
-        assert!(proof
-            .verify(&leaf_crh_params, &two_to_one_params, &rt, [leaf])
-            .unwrap());
+        assert!(
+            proof
+                .verify(&leaf_crh_params, &two_to_one_params, &rt, [leaf])
+                .unwrap()
+        );
 
         Ok(ZkWalletCircuit {
             // constants

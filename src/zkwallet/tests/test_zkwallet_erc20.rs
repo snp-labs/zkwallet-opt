@@ -7,10 +7,10 @@ mod test {
     use ark_ff::Fp;
     use ark_ff::PrimeField;
 
+    use ark_std::UniformRand;
     use ark_std::rand::RngCore;
     use ark_std::rand::SeedableRng;
     use ark_std::test_rng;
-    use ark_std::UniformRand;
     use ark_std::{One, Zero};
 
     use crate::Error;
@@ -21,15 +21,15 @@ mod test {
     use crate::gadget::merkle_tree;
     use crate::gadget::merkle_tree::mocking::MockingMerkleTree;
 
-    use crate::gadget::symmetric_encrytions::symmetric;
     use crate::gadget::symmetric_encrytions::SymmetricEncryption;
+    use crate::gadget::symmetric_encrytions::symmetric;
 
+    use crate::gadget::public_encryptions::AsymmetricEncryptionScheme;
     use crate::gadget::public_encryptions::elgamal;
     use crate::gadget::public_encryptions::elgamal::ElGamal;
-    use crate::gadget::public_encryptions::AsymmetricEncryptionScheme;
 
-    use crate::gadget::hashes::mimc7;
     use crate::gadget::hashes::CRHScheme;
+    use crate::gadget::hashes::mimc7;
 
     type C = ark_ed_on_bn254::EdwardsProjective;
     type GG = ark_ed_on_bn254::constraints::EdwardsVar;
@@ -196,9 +196,11 @@ mod test {
             .unwrap();
 
         let i: u32 = 0;
-        assert!(proof
-            .verify(&leaf_crh_params, &two_to_one_params, &rt, [leaf])
-            .unwrap());
+        assert!(
+            proof
+                .verify(&leaf_crh_params, &two_to_one_params, &rt, [leaf])
+                .unwrap()
+        );
 
         Ok(ZkWalletCircuit {
             // constants
