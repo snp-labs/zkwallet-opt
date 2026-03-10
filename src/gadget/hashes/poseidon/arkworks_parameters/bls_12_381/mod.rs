@@ -1,0 +1,5 @@
+pub mod poseidon_parameter_bls_12_381_16_to_1;
+pub mod poseidon_parameter_bls_12_381_1_to_1;
+pub mod poseidon_parameter_bls_12_381_2_to_1;
+pub mod poseidon_parameter_bls_12_381_4_to_1;
+pub mod poseidon_parameter_bls_12_381_8_to_1;
