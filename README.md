@@ -42,3 +42,10 @@ $n$개의 자식을 가지는 $n$-ary 머클 트리를 구현합니다. 특히 Z
 ## 제약 사항
 *   현재 구현은 리프 노드의 개수가 $n$의 거듭제곱($n^d$)인 완전한 균형 트리만 지원합니다.
 *   인덱스 정보가 해시 결과에 녹아있으므로, 명시적인 인덱스 추출이 필요한 경우에는 적합하지 않을 수 있습니다.
+
+## 최적화
+
+n-ary Merkle Tree의 membership proof에 대한 constraint 수
+$(log_{ary}^{leaves}) * (\text{n-to-1 hash constraints} + \text{OR constraints}) + \text{leafhash constraints}$
+
+-> 계산해보면 ary = 8 일 때 최적
