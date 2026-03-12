@@ -1,0 +1,5 @@
+pub mod poseidon_parameter_bn254_16_to_1;
+pub mod poseidon_parameter_bn254_1_to_1;
+pub mod poseidon_parameter_bn254_2_to_1;
+pub mod poseidon_parameter_bn254_4_to_1;
+pub mod poseidon_parameter_bn254_8_to_1;

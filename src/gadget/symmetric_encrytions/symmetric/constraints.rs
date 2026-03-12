@@ -10,8 +10,8 @@ use std::marker::PhantomData;
 use super::{Ciphertext, Plaintext, Randomness, SymmetricEncryptionScheme, SymmetricKey};
 use crate::gadget::{
     hashes::{
-        constraints::TwoToOneCRHSchemeGadget,
-        mimc7::constraints::{ParametersVar, TwoToOneMiMCGadget},
+        constraints::CRHSchemeGadget,
+        poseidon::constraints::{CRHGadget, CRHParametersVar},
     },
     symmetric_encrytions::constraints::SymmetricEncryptionGadget,
 };
@@ -148,7 +148,7 @@ impl<F> SymmetricEncryptionGadget<SymmetricEncryptionScheme<F>, F>
 where
     F: PrimeField + Absorb,
 {
-    type ParametersVar = ParametersVar<F>;
+    type ParametersVar = CRHParametersVar<F>;
 
     type RandomnessVar = RandomnessVar<F>;
     type SymmetricKeyVar = SymmetricKeyVar<F>;
@@ -161,15 +161,14 @@ where
         k: Self::SymmetricKeyVar,
         m: Self::PlaintextVar,
     ) -> Result<Self::CiphertextVar, SynthesisError> {
-        let rc = params.clone();
-        let r = r.r.clone();
-        let k = k.k.clone();
-        let m = m.m.clone();
+        let r_var = r.r.clone();
+        let k_var = k.k.clone();
+        let m_var = m.m.clone();
 
-        let h = TwoToOneMiMCGadget::<F>::evaluate(&rc, &k.clone(), &r.clone())?;
-        let c = h.clone() + m.clone();
+        let h = CRHGadget::<F>::evaluate(&params, &[k_var, r_var.clone()])?;
+        let c = h + m_var;
 
-        Ok(CiphertextVar { r, c })
+        Ok(CiphertextVar { r: r_var, c })
     }
 
     fn decrypt(
@@ -177,11 +176,10 @@ where
         k: Self::SymmetricKeyVar,
         ct: Self::CiphertextVar,
     ) -> Result<Self::PlaintextVar, SynthesisError> {
-        let rc = params.clone();
-        let CiphertextVar { r, c } = ct.clone();
-        let k = k.k.clone();
+        let CiphertextVar { r, c } = ct;
+        let k_var = k.k;
 
-        let h = TwoToOneMiMCGadget::<F>::evaluate(&rc, &k.clone(), &r.clone())?;
+        let h = CRHGadget::<F>::evaluate(&params, &[k_var, r])?;
         let m = c - h;
 
         Ok(PlaintextVar { m })
@@ -190,17 +188,18 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use ark_bn254::Fr;
-    use ark_ff::Fp;
+    use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
     use ark_r1cs_std::R1CSVar;
     use ark_r1cs_std::alloc::AllocVar;
     use ark_r1cs_std::eq::EqGadget;
     use ark_relations::r1cs::ConstraintSystem;
 
     use crate::gadget::{
-        hashes::mimc7::{Parameters, constraints::ParametersVar, parameters},
+        hashes::poseidon::{
+            arkworks_parameters::bn254::poseidon_parameter_bn254_2_to_1,
+            constraints::CRHParametersVar,
+        },
         symmetric_encrytions::{
             SymmetricEncryption, constraints::SymmetricEncryptionGadget,
             symmetric::constraints::SymmetricEncryptionSchemeGadget,
@@ -214,19 +213,18 @@ mod tests {
         type MyEnc = SymmetricEncryptionScheme<Fr>;
         type MyGadget = SymmetricEncryptionSchemeGadget<Fr>;
 
-        let rc = Parameters {
-            round_constants: parameters::get_bn256_round_constants().clone(),
-        };
-        let r: Fr = Fp::from_str("3").unwrap();
-        let k: Fr = Fp::from_str("3").unwrap();
-        let m: Fr = Fp::from_str("5").unwrap();
+        let hash_param: PoseidonConfig<Fr> =
+            poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into();
+        let r: Fr = Fr::from(3u64);
+        let k: Fr = Fr::from(3u64);
+        let m: Fr = Fr::from(5u64);
 
         let random = Randomness { r };
         let key = SymmetricKey { k };
         let msg = Plaintext { m };
 
         let ct = SymmetricEncryptionScheme::<Fr>::encrypt(
-            rc.clone(),
+            hash_param.clone(),
             random.clone(),
             key.clone(),
             msg.clone(),
@@ -235,7 +233,8 @@ mod tests {
         println!("ct: {:?}", ct.c);
 
         let m_dec =
-            SymmetricEncryptionScheme::<Fr>::decrypt(rc.clone(), key.clone(), ct.clone()).unwrap();
+            SymmetricEncryptionScheme::<Fr>::decrypt(hash_param.clone(), key.clone(), ct.clone())
+                .unwrap();
         println!("m: {:?}", m_dec.m);
 
         let cs = ConstraintSystem::<Fr>::new_ref();
@@ -261,11 +260,12 @@ mod tests {
             )
             .unwrap();
 
-        let param_var =
-            ParametersVar::<Fr>::new_constant(ark_relations::ns!(cs, "gadget_const"), rc.clone())
-                .unwrap();
-        let result_var =
-            MyGadget::encrypt(param_var.clone(), randomness_var, key_var, msg_var).unwrap();
+        let param_var = CRHParametersVar::<Fr>::new_constant(
+            ark_relations::ns!(cs, "gadget_const"),
+            &hash_param,
+        )
+        .unwrap();
+        let result_var = MyGadget::encrypt(param_var, randomness_var, key_var, msg_var).unwrap();
 
         let expected_var =
             <MyGadget as SymmetricEncryptionGadget<MyEnc, Fr>>::CiphertextVar::new_input(

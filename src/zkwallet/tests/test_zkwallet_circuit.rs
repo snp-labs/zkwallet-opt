@@ -15,9 +15,12 @@ mod test {
     use ark_std::test_rng;
 
     use crate::zkwallet;
-    use crate::zkwallet::circuit::ZkWalletCircuit;
+    use crate::zkwallet::circuit::{PoseidonConfigSet, ZkWalletCircuit};
 
-    use crate::gadget::hashes::mimc7;
+    use crate::gadget::hashes::poseidon::arkworks_parameters::bn254::{
+        poseidon_parameter_bn254_1_to_1, poseidon_parameter_bn254_2_to_1,
+        poseidon_parameter_bn254_4_to_1, poseidon_parameter_bn254_8_to_1,
+    };
 
     // type C = ark_bn254::G1Projective;
     // type GG = ark_ec::bn::g1::G1Projective<ark_bn254::g1::Config>;
@@ -39,19 +42,26 @@ mod test {
         println!("0x{}", hex_string);
     }
 
+    fn get_poseidon_config_set() -> PoseidonConfigSet<F> {
+        PoseidonConfigSet {
+            poseidon_pp_1: poseidon_parameter_bn254_1_to_1::get_poseidon_parameters().into(),
+            poseidon_pp_2: poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into(),
+            poseidon_pp_4: poseidon_parameter_bn254_4_to_1::get_poseidon_parameters().into(),
+            poseidon_pp_8: poseidon_parameter_bn254_8_to_1::get_poseidon_parameters().into(),
+        }
+    }
+
     #[test]
     fn test_zkwallet_test_input() {
         use ark_relations::r1cs::ConstraintSynthesizer;
 
         let mut rng = ark_std::rand::rngs::StdRng::seed_from_u64(test_rng().next_u64());
 
-        let rc: mimc7::Parameters<F> = mimc7::Parameters {
-            round_constants: mimc7::parameters::get_bn256_round_constants(),
-        };
+        let hash_param = get_poseidon_config_set();
 
         let test_input =
             <ZkWalletCircuit<C, GG> as zkwallet::MockingCircuit<C, GG>>::generate_circuit(
-                rc, 32, &mut rng,
+                hash_param, 11, &mut rng,
             )
             .unwrap();
 
@@ -59,19 +69,18 @@ mod test {
 
         test_input.clone().generate_constraints(cs.clone()).unwrap();
         assert!(cs.is_satisfied().unwrap());
+        println!("Number of constraints: {}", cs.num_constraints());
     }
 
     #[test]
     fn test_zkwallet_circuit_groth16() {
         let mut rng = ark_std::rand::rngs::StdRng::seed_from_u64(test_rng().next_u64());
         println!("Generate ZkWallet test input!");
-        let rc: mimc7::Parameters<F> = mimc7::Parameters {
-            round_constants: mimc7::parameters::get_bn256_round_constants(),
-        };
+        let hash_param = get_poseidon_config_set();
 
         let test_input =
             <ZkWalletCircuit<C, GG> as zkwallet::MockingCircuit<C, GG>>::generate_circuit(
-                rc, 32, &mut rng,
+                hash_param, 11, &mut rng,
             )
             .unwrap();
 
@@ -126,29 +135,6 @@ mod test {
 
                 println!("Generate proof!");
                 let proof = Groth16::<Bn254>::prove(&pk, c.clone(), &mut rng).unwrap();
-
-                /////////////////////////
-                // prove 할 때 사용되는 입력과 verify 입력에 들어가는 입력 출력용 코드
-                // use ark_relations::r1cs::ConstraintSynthesizer;
-                // let cs = ark_relations::r1cs::ConstraintSystem::new_ref();
-                // cs.set_optimization_goal(ark_relations::r1cs::OptimizationGoal::Constraints);
-
-                // c.generate_constraints(cs.clone()).unwrap();
-                // cs.finalize();
-                // let prover = cs.borrow().unwrap();
-
-                // println!("cs prover");
-                // prover.instance_assignment.iter().enumerate().for_each(|(i, x)| {
-                //     print!("{}: ", i);
-                //     print_hex(*x);
-                // });
-
-                // println!("\ncs vf");
-                // image.iter().enumerate().for_each(|(i, x)| {
-                //     print!("{}: ", i+1);
-                //     print_hex(*x);
-                // });
-                /////////////////////////
 
                 assert!(Groth16::<Bn254>::verify_with_processed_vk(&pvk, &image, &proof).unwrap());
             }

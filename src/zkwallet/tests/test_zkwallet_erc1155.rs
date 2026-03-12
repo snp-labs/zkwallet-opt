@@ -15,11 +15,9 @@ mod test {
 
     use crate::Error;
 
-    use crate::zkwallet::circuit::FieldMTConfig;
-    use crate::zkwallet::circuit::ZkWalletCircuit;
+    use crate::zkwallet::circuit::{FieldMTConfig, PoseidonConfigSet, ZkWalletCircuit};
 
-    use crate::gadget::merkle_tree;
-    use crate::gadget::merkle_tree::mocking::MockingMerkleTree;
+    use crate::gadget::merkle_tree_n_ary::mocking::{MockingMerkleTree, get_mocking_merkle_tree};
 
     use crate::gadget::symmetric_encrytions::SymmetricEncryption;
     use crate::gadget::symmetric_encrytions::symmetric;
@@ -29,16 +27,29 @@ mod test {
     use crate::gadget::public_encryptions::elgamal::ElGamal;
 
     use crate::gadget::hashes::CRHScheme;
-    use crate::gadget::hashes::mimc7;
+    use crate::gadget::hashes::poseidon;
+    use crate::gadget::hashes::poseidon::arkworks_parameters::bn254::{
+        poseidon_parameter_bn254_1_to_1, poseidon_parameter_bn254_2_to_1,
+        poseidon_parameter_bn254_4_to_1, poseidon_parameter_bn254_8_to_1,
+    };
 
     type C = ark_ed_on_bn254::EdwardsProjective;
     type GG = ark_ed_on_bn254::constraints::EdwardsVar;
 
     type F = ark_bn254::Fr;
-    type H = mimc7::MiMC<F>;
+    type H = poseidon::PoseidonHash<F>;
+
+    fn get_poseidon_config_set() -> PoseidonConfigSet<F> {
+        PoseidonConfigSet {
+            poseidon_pp_1: poseidon_parameter_bn254_1_to_1::get_poseidon_parameters().into(),
+            poseidon_pp_2: poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into(),
+            poseidon_pp_4: poseidon_parameter_bn254_4_to_1::get_poseidon_parameters().into(),
+            poseidon_pp_8: poseidon_parameter_bn254_8_to_1::get_poseidon_parameters().into(),
+        }
+    }
 
     #[allow(non_snake_case)]
-    fn test_erc1155_input(
+    fn test_eposeidon_pp_1155_input(
         v_ena_old: F,
         v_ena_new: F,
         pv: F,
@@ -55,9 +66,7 @@ mod test {
 
         let mut rng = ark_std::rand::rngs::StdRng::seed_from_u64(test_rng().next_u64());
 
-        let rc: mimc7::Parameters<F> = mimc7::Parameters {
-            round_constants: mimc7::parameters::get_bn256_round_constants(),
-        };
+        let hash_param = get_poseidon_config_set();
 
         let elgamal_param: elgamal::Parameters<C> = elgamal::Parameters { generator };
 
@@ -85,21 +94,21 @@ mod test {
         let key = symmetric::SymmetricKey { k: sk };
 
         let cin0 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.clone(),
+            hash_param.poseidon_pp_2.clone(),
             random[0].clone(),
             key.clone(),
             symmetric::Plaintext { m: tk_addr },
         )
         .unwrap();
         let cin1 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.clone(),
+            hash_param.poseidon_pp_2.clone(),
             random[1].clone(),
             key.clone(),
             symmetric::Plaintext { m: tk_id },
         )
         .unwrap();
         let cin2 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.clone(),
+            hash_param.poseidon_pp_2.clone(),
             random[2].clone(),
             key.clone(),
             symmetric::Plaintext { m: v_ena_old },
@@ -113,21 +122,21 @@ mod test {
         };
 
         let cout0 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.clone(),
+            hash_param.poseidon_pp_2.clone(),
             random[0].clone(),
             key.clone(),
             symmetric::Plaintext { m: tk_addr },
         )
         .unwrap();
         let cout1 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.clone(),
+            hash_param.poseidon_pp_2.clone(),
             random[1].clone(),
             key.clone(),
             symmetric::Plaintext { m: tk_id },
         )
         .unwrap();
         let cout2 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.clone(),
+            hash_param.poseidon_pp_2.clone(),
             random[2].clone(),
             key.clone(),
             symmetric::Plaintext { m: v_ena_new },
@@ -143,22 +152,30 @@ mod test {
         let pk_enc_recv_point_x = F::from_bigint(pk_enc_recv_point_x.into_bigint()).unwrap();
         let pk_enc_recv_point_y = F::from_bigint(pk_enc_recv_point_y.into_bigint()).unwrap();
 
-        let k_b = H::evaluate(&rc.clone(), [sk].to_vec()).unwrap();
-        let k_b_ = H::evaluate(&rc.clone(), [F::rand(&mut rng)].to_vec()).unwrap();
+        let k_b = H::evaluate(&hash_param.poseidon_pp_1, [sk].as_ref()).unwrap();
+        let k_b_ = H::evaluate(&hash_param.poseidon_pp_1, [F::rand(&mut rng)].as_ref()).unwrap();
         let addr = H::evaluate(
-            &rc.clone(),
-            [k_b, pk_enc_send_point_x, pk_enc_send_point_y].to_vec(),
+            &hash_param.poseidon_pp_4,
+            [k_b, pk_enc_send_point_x, pk_enc_send_point_y].as_ref(),
         )
         .unwrap();
         let addr_r = H::evaluate(
-            &rc.clone(),
-            [k_b_, pk_enc_recv_point_x, pk_enc_recv_point_y].to_vec(),
+            &hash_param.poseidon_pp_4,
+            [k_b_, pk_enc_recv_point_x, pk_enc_recv_point_y].as_ref(),
         )
         .unwrap();
-        let cm = H::evaluate(&rc.clone(), [du, tk_addr, tk_id, dv, addr].to_vec()).unwrap();
-        let cm_ = H::evaluate(&rc.clone(), [du_, tk_addr, tk_id, dv_, addr_r].to_vec()).unwrap();
+        let cm = H::evaluate(
+            &hash_param.poseidon_pp_8,
+            [du, tk_addr, tk_id, dv, addr].as_ref(),
+        )
+        .unwrap();
+        let cm_ = H::evaluate(
+            &hash_param.poseidon_pp_8,
+            [du_, tk_addr, tk_id, dv_, addr_r].as_ref(),
+        )
+        .unwrap();
 
-        let sn = H::evaluate(&rc.clone(), [cm, sk].to_vec()).unwrap();
+        let sn = H::evaluate(&hash_param.poseidon_pp_2, [cm, sk].as_ref()).unwrap();
 
         let random = elgamal::Randomness(r);
         let (_, K_u) = ElGamal::encrypt(&elgamal_param, &k_u_, &k, &random).unwrap();
@@ -173,7 +190,7 @@ mod test {
                 r: F::from_bigint((i as u64).into()).unwrap(),
             };
             let c = symmetric::SymmetricEncryptionScheme::encrypt(
-                rc.clone(),
+                hash_param.poseidon_pp_2.clone(),
                 random,
                 k_point_x.clone(),
                 symmetric::Plaintext { m: *m },
@@ -184,27 +201,21 @@ mod test {
         });
 
         println!("generate mocking tree");
-        let leaf_crh_params = rc.clone();
-        let two_to_one_params = leaf_crh_params.clone();
-
-        let proof: merkle_tree::Path<FieldMTConfig<F>> =
-            merkle_tree::mocking::get_mocking_merkle_tree(16);
-        let leaf: F = cm;
-
-        let rt = proof
-            .get_test_root(&leaf_crh_params, &two_to_one_params, [leaf])
+        let mock_path = get_mocking_merkle_tree::<8, FieldMTConfig<F>, F>(11);
+        let (valid_proof, rt) = mock_path
+            .get_test_path(
+                &hash_param.poseidon_pp_1,
+                &hash_param.poseidon_pp_8,
+                [cm].as_ref(),
+            )
             .unwrap();
-
-        let i: u32 = 0;
-        assert!(
-            proof
-                .verify(&leaf_crh_params, &two_to_one_params, &rt, [leaf])
-                .unwrap()
-        );
 
         Ok(ZkWalletCircuit {
             // constants
-            rc: rc.clone(),
+            poseidon_pp_1: hash_param.poseidon_pp_1,
+            poseidon_pp_2: hash_param.poseidon_pp_2,
+            poseidon_pp_4: hash_param.poseidon_pp_4,
+            poseidon_pp_8: hash_param.poseidon_pp_8,
             G: elgamal_param,
 
             // inputs
@@ -245,14 +256,14 @@ mod test {
             r: Some(random),
             k: Some(k),
             k_point_x: Some(k_point_x),
-            leaf_pos: Some(i),
-            tree_proof: Some(proof),
+            leaf_pos: Some(0),
+            tree_proof: Some(valid_proof),
             _curve_var: std::marker::PhantomData,
         })
     }
 
     #[test]
-    fn test_erc1155_note_exist() {
+    fn test_eposeidon_pp_1155_note_exist() {
         use ark_relations::r1cs::ConstraintSynthesizer;
 
         let pv: F = F::one(); // V Pub in
@@ -268,7 +279,7 @@ mod test {
         let tk_addr_: F = Fp::from_str("30164109555827864556672284724742514571715490286").unwrap();
         let tk_id_: F = F::one();
 
-        let test_input = test_erc1155_input(
+        let test_input = test_eposeidon_pp_1155_input(
             v_ena_old, v_ena_new, pv, pv_, dv, dv_, tk_addr, tk_id, tk_addr_, tk_id_, true,
         )
         .unwrap();
@@ -280,7 +291,7 @@ mod test {
     }
 
     #[test]
-    fn test_erc1155_note_not_exist() {
+    fn test_eposeidon_pp_1155_note_not_exist() {
         use ark_relations::r1cs::ConstraintSynthesizer;
 
         let pv: F = F::one(); // V Pub in
@@ -296,7 +307,7 @@ mod test {
         let tk_addr_: F = Fp::from_str("30164109555827864556672284724742514571715490286").unwrap();
         let tk_id_: F = F::one();
 
-        let test_input = test_erc1155_input(
+        let test_input = test_eposeidon_pp_1155_input(
             v_ena_old, v_ena_new, pv, pv_, dv, dv_, tk_addr, tk_id, tk_addr_, tk_id_, false,
         )
         .unwrap();
@@ -308,7 +319,7 @@ mod test {
     }
 
     #[test]
-    fn test_erc1155_v_pub_in_and_v_pub_out_is_zero() {
+    fn test_eposeidon_pp_1155_v_pub_in_and_v_pub_out_is_zero() {
         use ark_relations::r1cs::ConstraintSynthesizer;
 
         let pv: F = F::zero(); // V Pub in
@@ -324,7 +335,7 @@ mod test {
         let tk_addr_: F = Fp::zero();
         let tk_id_: F = F::zero();
 
-        let test_input = test_erc1155_input(
+        let test_input = test_eposeidon_pp_1155_input(
             v_ena_old, v_ena_new, pv, pv_, dv, dv_, tk_addr, tk_id, tk_addr_, tk_id_, true,
         )
         .unwrap();

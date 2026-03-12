@@ -7,9 +7,12 @@ mod test {
     use ark_std::test_rng;
 
     use crate::zkwallet;
-    use crate::zkwallet::circuit::ZkWalletCircuit;
+    use crate::zkwallet::circuit::{PoseidonConfigSet, ZkWalletCircuit};
 
-    use crate::gadget::hashes::mimc7;
+    use crate::gadget::hashes::poseidon::arkworks_parameters::bn254::{
+        poseidon_parameter_bn254_1_to_1, poseidon_parameter_bn254_2_to_1,
+        poseidon_parameter_bn254_4_to_1, poseidon_parameter_bn254_8_to_1,
+    };
 
     // type C = ark_bn254::G1Projective;
     // type GG = ark_ec::bn::g1::G1Projective<ark_bn254::g1::Config>;
@@ -31,6 +34,15 @@ mod test {
         println!("0x{}", hex_string);
     }
 
+    fn get_poseidon_config_set() -> PoseidonConfigSet<F> {
+        PoseidonConfigSet {
+            poseidon_pp_1: poseidon_parameter_bn254_1_to_1::get_poseidon_parameters().into(),
+            poseidon_pp_2: poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into(),
+            poseidon_pp_4: poseidon_parameter_bn254_4_to_1::get_poseidon_parameters().into(),
+            poseidon_pp_8: poseidon_parameter_bn254_8_to_1::get_poseidon_parameters().into(),
+        }
+    }
+
     #[test]
     #[should_panic]
     fn test_zkwallet_assert1_sk_send_own() {
@@ -38,13 +50,11 @@ mod test {
 
         let mut rng = ark_std::rand::rngs::StdRng::seed_from_u64(test_rng().next_u64());
 
-        let rc: mimc7::Parameters<F> = mimc7::Parameters {
-            round_constants: mimc7::parameters::get_bn256_round_constants(),
-        };
+        let hash_param = get_poseidon_config_set();
 
         let mut test_input =
             <ZkWalletCircuit<C, GG> as zkwallet::MockingCircuit<C, GG>>::generate_circuit(
-                rc, 32, &mut rng,
+                hash_param, 11, &mut rng,
             )
             .unwrap();
 
@@ -63,13 +73,11 @@ mod test {
 
         let mut rng = ark_std::rand::rngs::StdRng::seed_from_u64(test_rng().next_u64());
 
-        let rc: mimc7::Parameters<F> = mimc7::Parameters {
-            round_constants: mimc7::parameters::get_bn256_round_constants(),
-        };
+        let hash_param = get_poseidon_config_set();
 
         let mut test_input =
             <ZkWalletCircuit<C, GG> as zkwallet::MockingCircuit<C, GG>>::generate_circuit(
-                rc, 32, &mut rng,
+                hash_param, 11, &mut rng,
             )
             .unwrap();
 

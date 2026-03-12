@@ -1,8 +1,9 @@
 use crate::Error;
 use crate::gadget::hashes;
 use crate::gadget::hashes::constraints::CRHSchemeGadget;
-use crate::gadget::hashes::mimc7;
-use crate::gadget::hashes::mimc7::constraints::MiMCGadget;
+use crate::gadget::hashes::poseidon;
+use crate::gadget::hashes::poseidon::constraints::CRHGadget;
+use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
 use std::ops::Not;
 
 use crate::gadget::symmetric_encrytions::constraints::SymmetricEncryptionGadget;
@@ -13,16 +14,21 @@ use crate::gadget::public_encryptions::AsymmetricEncryptionGadget;
 use crate::gadget::public_encryptions::elgamal;
 use crate::gadget::public_encryptions::elgamal::constraints::ElGamalEncGadget;
 
-use crate::gadget::merkle_tree;
-use crate::gadget::merkle_tree::{Config, IdentityDigestConverter, constraints::ConfigGadget};
+use crate::gadget::merkle_tree_n_ary;
+use crate::gadget::merkle_tree_n_ary::mocking::{MockingMerkleTree, get_mocking_merkle_tree};
+use crate::gadget::merkle_tree_n_ary::{
+    Config, IdentityDigestConverter, constraints::ConfigGadget,
+};
 
 use ark_crypto_primitives::sponge::Absorb;
+use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
 use ark_ff::{Field, PrimeField};
 use ark_r1cs_std::prelude::*;
 use ark_r1cs_std::{fields::fp::FpVar, prelude::AllocVar};
 use ark_relations::r1cs::{ConstraintSynthesizer, SynthesisError};
 use ark_std::marker::PhantomData;
+use ark_std::{One, UniformRand};
 
 use super::MockingCircuit;
 
@@ -33,8 +39,11 @@ pub struct ZkWalletCircuit<C: CurveGroup, GG: CurveVar<C, ConstraintF<C>>>
 where
     <C as CurveGroup>::BaseField: PrimeField + Absorb,
 {
-    // constant
-    pub rc: mimc7::Parameters<C::BaseField>, // round_constants
+    // constants
+    pub poseidon_pp_1: PoseidonConfig<C::BaseField>, // 1-to-1
+    pub poseidon_pp_2: PoseidonConfig<C::BaseField>, // 2-to-1
+    pub poseidon_pp_4: PoseidonConfig<C::BaseField>, // 4-to-1
+    pub poseidon_pp_8: PoseidonConfig<C::BaseField>, // 8-to-1
     pub G: elgamal::Parameters<C>,
 
     // statement
@@ -72,7 +81,7 @@ where
     pub k: Option<elgamal::Plaintext<C>>,
     pub k_point_x: Option<symmetric::SymmetricKey<C::BaseField>>,
     pub leaf_pos: Option<u32>,
-    pub tree_proof: Option<merkle_tree::Path<FieldMTConfig<C::BaseField>>>,
+    pub tree_proof: Option<merkle_tree_n_ary::Path<8, FieldMTConfig<C::BaseField>>>,
     // directionSelector
     // intermediateHashWires
     pub _curve_var: PhantomData<GG>,
@@ -81,19 +90,19 @@ where
 pub struct FieldMTConfig<F: PrimeField> {
     _field: PhantomData<F>,
 }
-impl<F: PrimeField + Absorb> Config for FieldMTConfig<F> {
+impl<F: PrimeField + Absorb> Config<8> for FieldMTConfig<F> {
     type Leaf = [F];
     type LeafDigest = F;
     type LeafInnerDigestConverter = IdentityDigestConverter<F>;
     type InnerDigest = F;
-    type LeafHash = mimc7::MiMC<F>;
-    type TwoToOneHash = mimc7::TwoToOneMiMC<F>;
+    type LeafHash = poseidon::PoseidonHash<F>;
+    type NToOneHash = poseidon::NToOneCRH<8, F>;
 }
 
 struct FieldMTConfigVar<F: PrimeField> {
     _field: PhantomData<F>,
 }
-impl<F> ConfigGadget<FieldMTConfig<F>, F> for FieldMTConfigVar<F>
+impl<F> ConfigGadget<8, FieldMTConfig<F>, F> for FieldMTConfigVar<F>
 where
     F: PrimeField + Absorb,
 {
@@ -101,8 +110,8 @@ where
     type LeafDigest = FpVar<F>;
     type LeafInnerConverter = IdentityDigestConverter<FpVar<F>>;
     type InnerDigest = FpVar<F>;
-    type LeafHash = mimc7::constraints::MiMCGadget<F>;
-    type TwoToOneHash = mimc7::constraints::TwoToOneMiMCGadget<F>;
+    type LeafHash = poseidon::constraints::CRHGadget<F>;
+    type NToOneHash = poseidon::constraints::NToOneCRHGadget<8, F>;
 }
 
 #[allow(non_snake_case)]
@@ -118,9 +127,21 @@ where
         cs: ark_relations::r1cs::ConstraintSystemRef<C::BaseField>,
     ) -> Result<(), SynthesisError> {
         // constants
-        let rc = hashes::mimc7::constraints::ParametersVar::new_constant(
-            ark_relations::ns!(cs, "round constants"),
-            self.rc,
+        let poseidon_pp_1 = hashes::poseidon::constraints::CRHParametersVar::new_constant(
+            ark_relations::ns!(cs, "poseidon param 1-to-1"),
+            &self.poseidon_pp_1,
+        )?;
+        let poseidon_pp_2 = hashes::poseidon::constraints::CRHParametersVar::new_constant(
+            ark_relations::ns!(cs, "poseidon param 2-to-1"),
+            &self.poseidon_pp_2,
+        )?;
+        let poseidon_pp_4 = hashes::poseidon::constraints::CRHParametersVar::new_constant(
+            ark_relations::ns!(cs, "poseidon param 4-to-1"),
+            &self.poseidon_pp_4,
+        )?;
+        let poseidon_pp_8 = hashes::poseidon::constraints::CRHParametersVar::new_constant(
+            ark_relations::ns!(cs, "poseidon param 8-to-1"),
+            &self.poseidon_pp_8,
         )?;
         let G = elgamal::constraints::ParametersVar::new_constant(
             ark_relations::ns!(cs, "generator"),
@@ -277,17 +298,14 @@ where
             ark_relations::ns!(cs, "k_point_x"),
             || self.k_point_x.ok_or(SynthesisError::AssignmentMissing),
         )?;
-        let mut cw = merkle_tree::constraints::PathVar::<
+        let cw = merkle_tree_n_ary::constraints::PathVar::<
+            8,
             FieldMTConfig<C::BaseField>,
             C::BaseField,
             FieldMTConfigVar<C::BaseField>,
         >::new_witness(ark_relations::ns!(cs, "cw"), || {
             self.tree_proof.ok_or(SynthesisError::AssignmentMissing)
         })?;
-        let leaf_pos = UInt32::new_witness(ark_relations::ns!(cs, "leaf_pos"), || {
-            self.leaf_pos.ok_or(SynthesisError::AssignmentMissing)
-        })?
-        .to_bits_le();
         /////////////////////////////////////////////////////////////////
 
         /////////////////////////////////////////////////////////////////
@@ -303,7 +321,7 @@ where
         /////////////////////////////////////////////////////////////////
         // pk_send_own <- H(sk_send_own)
         let pk_own_send =
-            MiMCGadget::<C::BaseField>::evaluate(&rc, [sk.k.clone()].as_ref()).unwrap();
+            CRHGadget::<C::BaseField>::evaluate(&poseidon_pp_1, &[sk.k.clone()]).unwrap();
         k_b.enforce_equal(&pk_own_send)?;
         /////////////////////////////////////////////////////////////////
 
@@ -311,7 +329,8 @@ where
         // addr_send <- H(pk_send_own || pk_send_enc)
         let pk_enc_send_point = k_u.clone().pk.to_constraint_field()?;
         let hash_input = vec![vec![k_b], pk_enc_send_point].concat();
-        let result_addr_send = MiMCGadget::<C::BaseField>::evaluate(&rc, &hash_input).unwrap();
+        let result_addr_send =
+            CRHGadget::<C::BaseField>::evaluate(&poseidon_pp_4, &hash_input).unwrap();
         result_addr_send.enforce_equal(&addr)?;
         /////////////////////////////////////////////////////////////////
 
@@ -325,14 +344,14 @@ where
             result_addr_send,
         ]
         .to_vec();
-        let result_cm = MiMCGadget::<C::BaseField>::evaluate(&rc, &hash_input).unwrap();
+        let result_cm = CRHGadget::<C::BaseField>::evaluate(&poseidon_pp_8, &hash_input).unwrap();
         cm.enforce_equal(&result_cm).unwrap();
         /////////////////////////////////////////////////////////////////
 
         /////////////////////////////////////////////////////////////////
         // nf <- H(sk_send_own || cm_old)
         let hash_input = [cm.clone(), sk.clone().k].to_vec();
-        let result_sn = MiMCGadget::<C::BaseField>::evaluate(&rc, &hash_input).unwrap();
+        let result_sn = CRHGadget::<C::BaseField>::evaluate(&poseidon_pp_2, &hash_input).unwrap();
         sn.enforce_equal(&result_sn)?;
         /////////////////////////////////////////////////////////////////
 
@@ -344,9 +363,7 @@ where
         // Allocate Leaf
         let leaf_g: Vec<_> = vec![cm];
 
-        cw.set_leaf_position(leaf_pos?);
-
-        let path_check = cw.verify_membership(&rc.clone(), &rc.clone(), &rt, &leaf_g)?;
+        let path_check = cw.verify_membership(&poseidon_pp_1, &poseidon_pp_8, &rt, &leaf_g)?;
 
         // if dv == 0 then do not check merkle tree
         let check_dv = dv.is_zero()?;
@@ -384,7 +401,7 @@ where
             )?;
 
             let c = SymmetricEncryptionSchemeGadget::<C::BaseField>::encrypt(
-                rc.clone(),
+                poseidon_pp_2.clone(),
                 randomness,
                 k_point_x.clone(),
                 symmetric::constraints::PlaintextVar { m: m.clone() },
@@ -400,7 +417,8 @@ where
         let pk_enc_recv_point = k_u_.clone().pk.to_constraint_field()?;
 
         let hash_input = vec![vec![k_b_], pk_enc_recv_point].concat();
-        let result_addr_recv = MiMCGadget::<C::BaseField>::evaluate(&rc, &hash_input).unwrap();
+        let result_addr_recv =
+            CRHGadget::<C::BaseField>::evaluate(&poseidon_pp_4, &hash_input).unwrap();
         result_addr_recv.enforce_equal(&addr_r)?;
         /////////////////////////////////////////////////////////////////
 
@@ -413,7 +431,7 @@ where
             dv_.clone(),
             addr_r.clone(),
         ];
-        let result_cm_ = MiMCGadget::<C::BaseField>::evaluate(&rc, &hash_input).unwrap();
+        let result_cm_ = CRHGadget::<C::BaseField>::evaluate(&poseidon_pp_8, &hash_input).unwrap();
         cm_.enforce_equal(&result_cm_)?;
         /////////////////////////////////////////////////////////////////
 
@@ -427,38 +445,38 @@ where
         // (token_addr_w, token_id_w, v_ena_new) <- symmetric_ecryption.dec(k_send_ena, sct_new)
         // v_ena_new = v_ena_old + v_priv_in - v_priv_out + v_pub_in - v_pub_out
         let result_tk_addr_ena_old = SymmetricEncryptionSchemeGadget::<C::BaseField>::decrypt(
-            rc.clone(),
+            poseidon_pp_2.clone(),
             sk.clone(),
             cin[0].clone(),
         )
         .unwrap();
         let result_tk_id_ena_old = SymmetricEncryptionSchemeGadget::<C::BaseField>::decrypt(
-            rc.clone(),
+            poseidon_pp_2.clone(),
             sk.clone(),
             cin[1].clone(),
         )
         .unwrap();
         let result_v_in_ena_old = SymmetricEncryptionSchemeGadget::<C::BaseField>::decrypt(
-            rc.clone(),
+            poseidon_pp_2.clone(),
             sk.clone(),
             cin[2].clone(),
         )
         .unwrap();
 
         let result_tk_addr_ena_new = SymmetricEncryptionSchemeGadget::<C::BaseField>::decrypt(
-            rc.clone(),
+            poseidon_pp_2.clone(),
             sk.clone(),
             cout[0].clone(),
         )
         .unwrap();
         let result_tk_id_ena_new = SymmetricEncryptionSchemeGadget::<C::BaseField>::decrypt(
-            rc.clone(),
+            poseidon_pp_2.clone(),
             sk.clone(),
             cout[1].clone(),
         )
         .unwrap();
         let result_v_out_ena_new = SymmetricEncryptionSchemeGadget::<C::BaseField>::decrypt(
-            rc.clone(),
+            poseidon_pp_2.clone(),
             sk.clone(),
             cout[2].clone(),
         )
@@ -512,6 +530,24 @@ where
     }
 }
 
+pub struct PoseidonConfigSet<F: PrimeField> {
+    pub poseidon_pp_1: PoseidonConfig<F>,
+    pub poseidon_pp_2: PoseidonConfig<F>,
+    pub poseidon_pp_4: PoseidonConfig<F>,
+    pub poseidon_pp_8: PoseidonConfig<F>,
+}
+
+impl<F: PrimeField> Clone for PoseidonConfigSet<F> {
+    fn clone(&self) -> Self {
+        Self {
+            poseidon_pp_1: self.poseidon_pp_1.clone(),
+            poseidon_pp_2: self.poseidon_pp_2.clone(),
+            poseidon_pp_4: self.poseidon_pp_4.clone(),
+            poseidon_pp_8: self.poseidon_pp_8.clone(),
+        }
+    }
+}
+
 #[allow(non_snake_case)]
 impl<C, GG> MockingCircuit<C, GG> for ZkWalletCircuit<C, GG>
 where
@@ -521,27 +557,25 @@ where
     for<'a> &'a GG: GroupOpsBounds<'a, C, GG>,
 {
     type F = C::BaseField;
-    type HashParam = mimc7::Parameters<Self::F>;
-    type H = mimc7::MiMC<Self::F>;
+    type HashParam = PoseidonConfigSet<Self::F>;
+    type H = poseidon::PoseidonHash<Self::F>;
     type Output = ZkWalletCircuit<C, GG>;
 
     fn generate_circuit<R: ark_std::rand::Rng>(
-        round_constants: Self::HashParam,
+        hash_param: Self::HashParam,
         tree_height: u64,
         rng: &mut R,
     ) -> Result<Self::Output, Error> {
         use crate::gadget::hashes::CRHScheme;
-        use crate::gadget::merkle_tree::mocking::MockingMerkleTree;
         use crate::gadget::public_encryptions::AsymmetricEncryptionScheme;
         use crate::gadget::public_encryptions::elgamal::ElGamal;
         use crate::gadget::symmetric_encrytions::SymmetricEncryption;
 
-        use ark_ec::AffineRepr;
-        use ark_std::One;
-        use ark_std::UniformRand;
-
         let generator = C::generator().into_affine();
-        let rc = round_constants;
+        let poseidon_pp_1 = hash_param.poseidon_pp_1;
+        let poseidon_pp_2 = hash_param.poseidon_pp_2;
+        let poseidon_pp_4 = hash_param.poseidon_pp_4;
+        let poseidon_pp_8 = hash_param.poseidon_pp_8;
         let elgamal_param: elgamal::Parameters<C> = elgamal::Parameters { generator };
 
         let (apk, _) = ElGamal::keygen(&elgamal_param, rng).unwrap();
@@ -581,21 +615,21 @@ where
         let key = symmetric::SymmetricKey { k: sk };
 
         let cin0 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.clone(),
+            poseidon_pp_2.clone(),
             random[0].clone(),
             key.clone(),
             symmetric::Plaintext { m: tk_addr },
         )
         .unwrap();
         let cin1 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.clone(),
+            poseidon_pp_2.clone(),
             random[1].clone(),
             key.clone(),
             symmetric::Plaintext { m: tk_id },
         )
         .unwrap();
         let cin2 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.clone(),
+            poseidon_pp_2.clone(),
             random[2].clone(),
             key.clone(),
             symmetric::Plaintext { m: v_ena_old },
@@ -604,21 +638,21 @@ where
         let cin: Vec<Self::F> = vec![random[0].clone().r, cin0.c, cin1.c, cin2.c];
 
         let cout0 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.clone(),
+            poseidon_pp_2.clone(),
             random[0].clone(),
             key.clone(),
             symmetric::Plaintext { m: tk_addr },
         )
         .unwrap();
         let cout1 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.clone(),
+            poseidon_pp_2.clone(),
             random[1].clone(),
             key.clone(),
             symmetric::Plaintext { m: tk_id },
         )
         .unwrap();
         let cout2 = symmetric::SymmetricEncryptionScheme::encrypt(
-            rc.clone(),
+            poseidon_pp_2.clone(),
             random[2].clone(),
             key.clone(),
             symmetric::Plaintext { m: v_ena_new },
@@ -634,22 +668,23 @@ where
         let pk_enc_recv_point_x = Self::F::from_bigint(pk_enc_recv_point_x.into_bigint()).unwrap();
         let pk_enc_recv_point_y = Self::F::from_bigint(pk_enc_recv_point_y.into_bigint()).unwrap();
 
-        let k_b = Self::H::evaluate(&rc.clone(), [sk].to_vec()).unwrap();
-        let k_b_ = Self::H::evaluate(&rc.clone(), [Self::F::rand(rng)].to_vec()).unwrap();
+        let k_b = Self::H::evaluate(&poseidon_pp_1, [sk].as_ref()).unwrap();
+        let k_b_ = Self::H::evaluate(&poseidon_pp_1, [Self::F::rand(rng)].as_ref()).unwrap();
         let addr = Self::H::evaluate(
-            &rc.clone(),
-            [k_b, pk_enc_send_point_x, pk_enc_send_point_y].to_vec(),
+            &poseidon_pp_4,
+            [k_b, pk_enc_send_point_x, pk_enc_send_point_y].as_ref(),
         )
         .unwrap();
         let addr_r = Self::H::evaluate(
-            &rc.clone(),
-            [k_b_, pk_enc_recv_point_x, pk_enc_recv_point_y].to_vec(),
+            &poseidon_pp_4,
+            [k_b_, pk_enc_recv_point_x, pk_enc_recv_point_y].as_ref(),
         )
         .unwrap();
-        let cm = Self::H::evaluate(&rc.clone(), [du, tk_addr, tk_id, dv, addr].to_vec()).unwrap();
-        let cm_ = Self::H::evaluate(&rc.clone(), [du_, tk_addr, tk_id, dv_, addr_r].to_vec())?;
+        let cm =
+            Self::H::evaluate(&poseidon_pp_8, [du, tk_addr, tk_id, dv, addr].as_ref()).unwrap();
+        let cm_ = Self::H::evaluate(&poseidon_pp_8, [du_, tk_addr, tk_id, dv_, addr_r].as_ref())?;
 
-        let sn = Self::H::evaluate(&rc.clone(), [cm, sk].to_vec()).unwrap();
+        let sn = Self::H::evaluate(&poseidon_pp_2, [cm, sk].as_ref()).unwrap();
 
         let random = elgamal::Randomness(r);
         let (_, K_u) = ElGamal::encrypt(&elgamal_param, &k_u_, &k, &random).unwrap();
@@ -664,7 +699,7 @@ where
                 r: Self::F::from_bigint((i as u64).into()).unwrap(),
             };
             let c = symmetric::SymmetricEncryptionScheme::encrypt(
-                rc.clone(),
+                poseidon_pp_2.clone(),
                 random,
                 k_point_x.clone(),
                 symmetric::Plaintext { m: *m },
@@ -675,27 +710,19 @@ where
         });
 
         println!("generate mocking tree");
-        let leaf_crh_params = rc.clone();
-        let two_to_one_params = leaf_crh_params.clone();
+        let leaf_crh_params = poseidon_pp_1.clone();
+        let n_to_one_params = poseidon_pp_8.clone();
 
-        let proof: merkle_tree::Path<FieldMTConfig<Self::F>> =
-            merkle_tree::mocking::get_mocking_merkle_tree(tree_height);
-        let leaf: Self::F = cm;
-
-        let rt = proof
-            .get_test_root(&leaf_crh_params, &two_to_one_params, [leaf])
-            .unwrap();
-
-        let i: u32 = 0;
-        assert!(
-            proof
-                .verify(&leaf_crh_params, &two_to_one_params, &rt, [leaf])
-                .unwrap()
-        );
+        let mock_path = get_mocking_merkle_tree::<8, FieldMTConfig<Self::F>, Self::F>(tree_height);
+        let (proof, rt) =
+            mock_path.get_test_path(&leaf_crh_params, &n_to_one_params, [cm].as_ref())?;
 
         Ok(ZkWalletCircuit {
             // constants
-            rc: rc.clone(),
+            poseidon_pp_1,
+            poseidon_pp_2,
+            poseidon_pp_4,
+            poseidon_pp_8,
             G: elgamal_param,
 
             // inputs
@@ -736,7 +763,7 @@ where
             r: Some(random),
             k: Some(k),
             k_point_x: Some(k_point_x),
-            leaf_pos: Some(i),
+            leaf_pos: Some(0),
             tree_proof: Some(proof),
             _curve_var: std::marker::PhantomData,
         })

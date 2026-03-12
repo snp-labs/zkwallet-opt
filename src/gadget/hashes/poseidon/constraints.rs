@@ -1,7 +1,13 @@
-use ark_crypto_primitives::sponge::Absorb;
-use ark_crypto_primitives::sponge::constraints::CryptographicSpongeVar;
-use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
-use ark_crypto_primitives::sponge::poseidon::constraints::PoseidonSpongeVar;
+use crate::gadget::hashes::{
+    CRHScheme, NToOneCRHScheme,
+    constraints::{CRHSchemeGadget, NToOneCRHSchemeGadget, TwoToOneCRHSchemeGadget},
+    poseidon::{NToOneCRH, PoseidonHash, TwoToOneCRH},
+};
+use ark_crypto_primitives::sponge::{
+    Absorb,
+    constraints::CryptographicSpongeVar,
+    poseidon::{PoseidonConfig, constraints::PoseidonSpongeVar},
+};
 use ark_ff::PrimeField;
 use ark_r1cs_std::{
     R1CSVar,
@@ -10,9 +16,6 @@ use ark_r1cs_std::{
 };
 use ark_relations::r1cs::{Namespace, SynthesisError};
 
-use crate::gadget::hashes::CRHScheme;
-use crate::gadget::hashes::constraints::{CRHSchemeGadget, TwoToOneCRHSchemeGadget};
-use crate::gadget::hashes::poseidon::{PoseidonHash, TwoToOneCRH};
 #[cfg(not(feature = "std"))]
 use ark_std::vec::Vec;
 use ark_std::{borrow::Borrow, marker::PhantomData};
@@ -96,6 +99,55 @@ impl<F: PrimeField + Absorb> TwoToOneCRHSchemeGadget<TwoToOneCRH<F>, F> for TwoT
     }
 }
 
+pub struct NToOneCRHGadget<const N: usize, F: PrimeField + Absorb> {
+    field_phantom: PhantomData<F>,
+}
+
+impl<const N: usize, F: PrimeField + Absorb> NToOneCRHSchemeGadget<N, NToOneCRH<N, F>, F>
+    for NToOneCRHGadget<N, F>
+{
+    type InputVar = FpVar<F>;
+    type OutputVar = FpVar<F>;
+    type ParametersVar = CRHParametersVar<F>;
+
+    fn evaluate(
+        parameters: &Self::ParametersVar,
+        inputs: &[Self::InputVar; N],
+    ) -> Result<Self::OutputVar, SynthesisError> {
+        Self::compress(parameters, inputs)
+    }
+
+    fn compress(
+        parameters: &Self::ParametersVar,
+        inputs: &[Self::OutputVar; N],
+    ) -> Result<Self::OutputVar, SynthesisError> {
+        let mut cs = None;
+        for input in inputs {
+            cs = cs.or(Some(input.cs()));
+        }
+
+        if cs.is_none() {
+            let mut constant_inputs = Vec::with_capacity(N);
+            for input in inputs {
+                constant_inputs.push(input.value()?);
+            }
+            let inputs_array: [F; N] = constant_inputs
+                .try_into()
+                .map_err(|_| SynthesisError::AssignmentMissing)?;
+            Ok(FpVar::Constant(
+                NToOneCRH::<N, F>::evaluate(&parameters.parameters, &inputs_array).unwrap(),
+            ))
+        } else {
+            let mut sponge = PoseidonSpongeVar::new(cs.unwrap(), &parameters.parameters);
+            for input in inputs {
+                sponge.absorb(input)?;
+            }
+            let res = sponge.squeeze_field_elements(1)?;
+            Ok(res[0].clone())
+        }
+    }
+}
+
 impl<F: PrimeField + Absorb> AllocVar<PoseidonConfig<F>, F> for CRHParametersVar<F> {
     fn new_variable<T: Borrow<PoseidonConfig<F>>>(
         _cs: impl Into<Namespace<F>>,
@@ -112,17 +164,17 @@ impl<F: PrimeField + Absorb> AllocVar<PoseidonConfig<F>, F> for CRHParametersVar
 
 #[cfg(test)]
 mod test {
-    use crate::gadget::hashes::constraints::{CRHSchemeGadget, TwoToOneCRHSchemeGadget};
-    use crate::gadget::hashes::poseidon::constraints::{
-        CRHGadget, CRHParametersVar, TwoToOneCRHGadget,
+    use crate::gadget::hashes::{
+        CRHScheme, TwoToOneCRHScheme,
+        constraints::{CRHSchemeGadget, NToOneCRHSchemeGadget, TwoToOneCRHSchemeGadget},
+        poseidon::constraints::{CRHGadget, CRHParametersVar, NToOneCRHGadget, TwoToOneCRHGadget},
+        poseidon::{PoseidonHash, TwoToOneCRH},
     };
-    use crate::gadget::hashes::poseidon::{PoseidonHash, TwoToOneCRH};
-    use crate::gadget::hashes::{CRHScheme, TwoToOneCRHScheme};
-    use ark_bls12_377::Fr;
+    use ark_bn254::Fr;
     use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
-    use ark_r1cs_std::alloc::AllocVar;
     use ark_r1cs_std::{
         R1CSVar,
+        alloc::AllocVar,
         fields::fp::{AllocatedFp, FpVar},
     };
     use ark_relations::r1cs::ConstraintSystem;
@@ -189,5 +241,117 @@ mod test {
         assert_eq!(crh_a, crh_a_g.value().unwrap());
         assert_eq!(crh_b, crh_b_g.value().unwrap());
         assert_eq!(crh, crh_g.value().unwrap());
+    }
+
+    #[test]
+    fn test_n_to_one_consistency() {
+        use crate::gadget::hashes::{
+            NToOneCRHScheme,
+            constraints::NToOneCRHSchemeGadget,
+            poseidon::{
+                NToOneCRH, arkworks_parameters::bn254::poseidon_parameter_bn254_8_to_1,
+                constraints::NToOneCRHGadget,
+            },
+        };
+        use ark_bn254::Fr;
+        let mut rng = ark_std::test_rng();
+        let params: PoseidonConfig<Fr> =
+            poseidon_parameter_bn254_8_to_1::get_poseidon_parameters().into();
+
+        let inputs = [
+            Fr::rand(&mut rng),
+            Fr::rand(&mut rng),
+            Fr::rand(&mut rng),
+            Fr::rand(&mut rng),
+            Fr::rand(&mut rng),
+            Fr::rand(&mut rng),
+            Fr::rand(&mut rng),
+            Fr::rand(&mut rng),
+        ];
+
+        // circuit 밖에서의 Poseidon 해시 결과
+        let res_native = NToOneCRH::<8, Fr>::evaluate(&params, &inputs).unwrap();
+
+        // circuit 안에서의 Poseidon 해시 결과
+        let cs = ConstraintSystem::<Fr>::new_ref();
+        let mut inputs_var = Vec::new();
+        for input in &inputs {
+            inputs_var.push(FpVar::new_witness(cs.clone(), || Ok(input)).unwrap());
+        }
+        let inputs_var: [FpVar<Fr>; 8] = inputs_var.try_into().unwrap();
+
+        let params_var = CRHParametersVar::<Fr>::new_constant(cs.clone(), &params).unwrap();
+        let res_var = NToOneCRHGadget::<8, Fr>::evaluate(&params_var, &inputs_var).unwrap();
+
+        assert_eq!(res_native, res_var.value().unwrap());
+        assert!(cs.is_satisfied().unwrap());
+    }
+
+    #[test]
+    fn test_n_to_one_vs_two_to_one() {
+        use crate::gadget::hashes::poseidon::arkworks_parameters::bn254::poseidon_parameter_bn254_2_to_1;
+
+        let mut rng = ark_std::test_rng();
+        let params = poseidon_parameter_bn254_2_to_1::get_poseidon_parameters();
+        let config: PoseidonConfig<Fr> = params.into();
+
+        let inputs = [Fr::rand(&mut rng), Fr::rand(&mut rng)];
+
+        let cs = ConstraintSystem::<Fr>::new_ref();
+        let inputs_var = [
+            FpVar::new_witness(cs.clone(), || Ok(inputs[0])).unwrap(),
+            FpVar::new_witness(cs.clone(), || Ok(inputs[1])).unwrap(),
+        ];
+
+        let params_g = CRHParametersVar::<Fr>::new_constant(cs.clone(), &config).unwrap();
+
+        // 1. NToOneCRHGadget (N=2)
+        let res_n = NToOneCRHGadget::<2, Fr>::evaluate(&params_g, &inputs_var).unwrap();
+
+        // 2. TwoToOneCRHGadget
+        let res_two =
+            TwoToOneCRHGadget::<Fr>::evaluate(&params_g, &inputs_var[0], &inputs_var[1]).unwrap();
+
+        assert_eq!(res_n.value().unwrap(), res_two.value().unwrap());
+        assert!(cs.is_satisfied().unwrap());
+    }
+
+    #[test]
+    fn test_n_to_one_constant_vs_witness() {
+        use crate::gadget::hashes::poseidon::arkworks_parameters::bn254::poseidon_parameter_bn254_4_to_1;
+
+        let mut rng = ark_std::test_rng();
+        let params = poseidon_parameter_bn254_4_to_1::get_poseidon_parameters();
+        let config: PoseidonConfig<Fr> = params.into();
+        let inputs = [
+            Fr::rand(&mut rng),
+            Fr::rand(&mut rng),
+            Fr::rand(&mut rng),
+            Fr::rand(&mut rng),
+        ];
+
+        let cs = ConstraintSystem::<Fr>::new_ref();
+        let params_g = CRHParametersVar::<Fr>::new_constant(cs.clone(), &config).unwrap();
+
+        // 1. 모든 입력을 Constant로 (cs.is_none() 분기)
+        let inputs_const = [
+            FpVar::new_constant(cs.clone(), inputs[0]).unwrap(),
+            FpVar::new_constant(cs.clone(), inputs[1]).unwrap(),
+            FpVar::new_constant(cs.clone(), inputs[2]).unwrap(),
+            FpVar::new_constant(cs.clone(), inputs[3]).unwrap(),
+        ];
+        let res_const = NToOneCRHGadget::<4, Fr>::evaluate(&params_g, &inputs_const).unwrap();
+
+        // 2. 모든 입력을 Witness로 (SpongeVar 분기)
+        let inputs_witness = [
+            FpVar::new_witness(cs.clone(), || Ok(inputs[0])).unwrap(),
+            FpVar::new_witness(cs.clone(), || Ok(inputs[1])).unwrap(),
+            FpVar::new_witness(cs.clone(), || Ok(inputs[2])).unwrap(),
+            FpVar::new_witness(cs.clone(), || Ok(inputs[3])).unwrap(),
+        ];
+        let res_witness = NToOneCRHGadget::<4, Fr>::evaluate(&params_g, &inputs_witness).unwrap();
+
+        assert_eq!(res_const.value().unwrap(), res_witness.value().unwrap());
+        assert!(cs.is_satisfied().unwrap());
     }
 }
