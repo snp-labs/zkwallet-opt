@@ -67,9 +67,14 @@ mod test {
 
         let cs = ark_relations::r1cs::ConstraintSystem::new_ref();
 
+        // Weight optimization goal is fastest for Inlining LCs phase
+        use ark_relations::r1cs::OptimizationGoal;
+        cs.set_optimization_goal(OptimizationGoal::Weight);
+
         test_input.clone().generate_constraints(cs.clone()).unwrap();
         assert!(cs.is_satisfied().unwrap());
         println!("Number of constraints: {}", cs.num_constraints());
+        println!("Optimization Goal: Weight");
     }
 
     #[test]
