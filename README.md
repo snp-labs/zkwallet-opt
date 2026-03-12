@@ -1,2 +1,53 @@
 # zkwallet-opt
 zkWallet constraint 최적화 버전용 레포
+
+# Poseidon Parameters
+
+Poseidon 해시 함수는 ZKP 회로 내에서 매우 효율적으로 동작하도록 설계되었으며, 특히 다중 입력($n$-to-1) 처리에 최적화되어 있습니다.
+
+## 지원되는 곡선 및 Arity (Input Rate)
+현재 프로젝트는 다음 곡선들에 대해 사전 생성된 Poseidon 파라미터를 제공합니다. 머클 트리(CRH)나 스폰지(Sponge) 구조에서 입력 길이가 $n$일 때, 이에 대응하는 파라미터를 선택하여 사용합니다.
+
+| 곡선 (Curve) | 지원 Arity ($n$-to-1) | 파라미터 위치 (src/gadget/hashes/poseidon/...) |
+| :--- | :--- | :--- |
+| **BN254** | 1, 2, 4, 8, 16 | `arkworks_parameters/bn254/` |
+| **BLS12-381** | 1, 2, 4, 8, 16 | `arkworks_parameters/bls_12_381/` |
+| **BLS12-377** | 1, 2, 4, 8, 16 | `arkworks_parameters/bls_12_377/` |
+
+## 주요 특징
+- **높은 효율성:** MiMC와 달리 입력 개수($n$)가 늘어나더라도 제약 조건(Constraint)의 수가 선형적으로 증가하지 않습니다. 따라서 $n$이 클수록 MiMC 대비 훨씬 효율적인 증명 생성이 가능합니다.
+- **머클 트리 최적화:** $n=4, 8, 16$ 등의 높은 Arity를 사용하여 트리의 깊이(Depth)를 줄임으로써 전체 회로의 복잡도를 획기적으로 낮출 수 있습니다.
+
+## 파라미터 생성 및 변환 (Generation)
+새로운 Arity나 곡선을 지원하기 위해 파라미터를 추가하는 방법은 다음과 같습니다:
+
+1.  **Sage 파라미터 생성:** [Hades/Poseidon Sage 구현체](https://extgit.isec.tugraz.at/krypto/hadeshash/-/tree/master/code?ref_type=heads)를 통해 필요한 곡선과 Arity에 맞는 파라미터 로그(`.txt`)를 생성합니다.
+2.  **로그 저장:** 생성된 파일을 `src/gadget/hashes/poseidon/sage_parameters/{curve}/` 경로에 배치합니다.
+3.  **자동 변환:** `cargo run --bin gen_poseidon_pp_{curve}` 명령을 실행합니다. 
+    *   이 도구는 Sage 로그를 파싱하여 Arkworks 호환 Rust 코드를 `arkworks_parameters/`에 자동 생성합니다.
+    *   동시에 `mod.rs`에 해당 모듈을 자동으로 등록하여 즉시 사용할 수 있도록 합니다.
+
+# Index-Free n-ary Merkle Tree with OR-Constraints 
+
+$n$개의 자식을 가지는 $n$-ary 머클 트리를 구현합니다. 특히 ZKP 회로 내에서 효율적인 멤버십 증명을 위해 **인덱스 비트 연산 대신 OR 제약(One-of-n)** 방식을 사용하도록 설계되었습니다.
+
+## 핵심 설계 (Index-Free Membership)
+
+기존의 바이너리 머클 트리는 내가 "왼쪽"인지 "오른쪽"인지를 나타내는 인덱스 비트(`Boolean`)를 저장하고, 이를 이용해 `select` 가젯으로 경로를 선택합니다. $n$-ary 트리로 확장할 경우 이 인덱스 비트가 $\log_2 n$개로 늘어나 회로가 복잡해집니다.
+
+우리는 이 문제를 다음과 같이 해결합니다:
+
+1.  **Path 데이터:** 각 층마다 형제 노드들을 포함한 **$n$개 입력 배열 전체**를 증명 데이터(Path)에 담습니다.
+2.  **OR 제약 (One-of-n):** 
+    *   하위 레이어의 해시 결과값 $H_{prev}$가 현재 레이어의 입력 배열 $[D_0, D_1, \dots, D_{n-1}]$ 중 하나와 반드시 일치해야 함을 증명합니다.
+    *   회로 수식: $\bigvee_{i=0}^{n-1} (D_i == H_{prev}) = \text{true}$
+3.  **해시 연결:** 검증된 $n$개 배열을 그대로 $n$-to-1 해시 함수에 넣어 상위 레이어의 해시값을 도출합니다.
+
+### 장점
+*   **회로 단순화:** 복잡한 인덱스 비트 쪼개기와 MUX(Multiplexer) 로직이 필요 없습니다.
+*   **익명성 (Anonymity):** 회로가 "내가 몇 번째 인덱스인지" 알 필요가 없으므로, 기본적으로 인덱스에 대한 영지식성이 보장됩니다.
+*   **Poseidon 최적화:** Poseidon 해시는 넓은 폭(Arity)을 가질 때 효율적이므로, $n=4, 8, 16$ 등을 사용하여 트리의 깊이를 획기적으로 줄일 수 있습니다.
+
+## 제약 사항
+*   현재 구현은 리프 노드의 개수가 $n$의 거듭제곱($n^d$)인 완전한 균형 트리만 지원합니다.
+*   인덱스 정보가 해시 결과에 녹아있으므로, 명시적인 인덱스 추출이 필요한 경우에는 적합하지 않을 수 있습니다.
