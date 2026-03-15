@@ -34,6 +34,8 @@ rayon = { version = "1.10.0", optional = true }
 num-traits = "0.2.19"
 thiserror = "2.0.12"
 
+hex = "0.4.3"
+
 # rsa의 간접 dependency (^1.4 필요)
 # 버전을 명시하지 않으면 rust 1.82.0에서 사용할 수 없는 버전이 설치되어 버전 명시
 base64ct = "=1.5.0"

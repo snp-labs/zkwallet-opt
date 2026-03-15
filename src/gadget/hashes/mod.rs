@@ -7,6 +7,7 @@ use ark_std::hash::Hash;
 pub mod constraints;
 
 pub mod poseidon;
+pub mod poseidon2;
 
 pub trait CRHScheme {
     type Input: ?Sized;

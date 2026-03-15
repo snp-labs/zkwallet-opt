@@ -1,9 +1,9 @@
 use crate::Error;
 use crate::gadget::hashes;
 use crate::gadget::hashes::constraints::CRHSchemeGadget;
-use crate::gadget::hashes::poseidon;
-use crate::gadget::hashes::poseidon::constraints::CRHGadget;
-use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
+use crate::gadget::hashes::poseidon2;
+use crate::gadget::hashes::poseidon2::constraints::Poseidon2CRHGadget;
+use crate::gadget::hashes::poseidon2::params::Poseidon2Params;
 use std::ops::Not;
 
 use crate::gadget::symmetric_encrytions::constraints::SymmetricEncryptionGadget;
@@ -20,7 +20,6 @@ use crate::gadget::merkle_tree_n_ary::{
     Config, IdentityDigestConverter, constraints::ConfigGadget,
 };
 
-use ark_crypto_primitives::sponge::Absorb;
 use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
 use ark_ff::{Field, PrimeField};
@@ -37,13 +36,13 @@ pub type ConstraintF<C> = <<C as CurveGroup>::BaseField as Field>::BasePrimeFiel
 #[derive(Clone)]
 pub struct ZkWalletCircuit<C: CurveGroup, GG: CurveVar<C, ConstraintF<C>>>
 where
-    <C as CurveGroup>::BaseField: PrimeField + Absorb,
+    <C as CurveGroup>::BaseField: PrimeField,
 {
     // constants
-    pub poseidon_pp_1: PoseidonConfig<C::BaseField>, // 1-to-1
-    pub poseidon_pp_2: PoseidonConfig<C::BaseField>, // 2-to-1
-    pub poseidon_pp_4: PoseidonConfig<C::BaseField>, // 4-to-1
-    pub poseidon_pp_8: PoseidonConfig<C::BaseField>, // 8-to-1
+    pub poseidon_pp_1: Poseidon2Params<C::BaseField>, // sponge t=2
+    pub poseidon_pp_2: Poseidon2Params<C::BaseField>, // sponge t=2
+    pub poseidon_pp_4: Poseidon2Params<C::BaseField>, // sponge t=4
+    pub poseidon_pp_8: Poseidon2Params<C::BaseField>, // sponge t=8, NToOne<8>
     pub G: elgamal::Parameters<C>,
 
     // statement
@@ -90,13 +89,13 @@ where
 pub struct FieldMTConfig<F: PrimeField> {
     _field: PhantomData<F>,
 }
-impl<F: PrimeField + Absorb> Config<8> for FieldMTConfig<F> {
+impl<F: PrimeField> Config<8> for FieldMTConfig<F> {
     type Leaf = [F];
     type LeafDigest = F;
     type LeafInnerDigestConverter = IdentityDigestConverter<F>;
     type InnerDigest = F;
-    type LeafHash = poseidon::PoseidonHash<F>;
-    type NToOneHash = poseidon::NToOneCRH<8, F>;
+    type LeafHash = poseidon2::Poseidon2Hash<F>;
+    type NToOneHash = poseidon2::Poseidon2NToOneCRH<8, F>;
 }
 
 struct FieldMTConfigVar<F: PrimeField> {
@@ -104,14 +103,14 @@ struct FieldMTConfigVar<F: PrimeField> {
 }
 impl<F> ConfigGadget<8, FieldMTConfig<F>, F> for FieldMTConfigVar<F>
 where
-    F: PrimeField + Absorb,
+    F: PrimeField,
 {
     type Leaf = [FpVar<F>];
     type LeafDigest = FpVar<F>;
     type LeafInnerConverter = IdentityDigestConverter<FpVar<F>>;
     type InnerDigest = FpVar<F>;
-    type LeafHash = poseidon::constraints::CRHGadget<F>;
-    type NToOneHash = poseidon::constraints::NToOneCRHGadget<8, F>;
+    type LeafHash = poseidon2::constraints::Poseidon2CRHGadget<F>;
+    type NToOneHash = poseidon2::constraints::Poseidon2NToOneCRHGadget<8, F>;
 }
 
 #[allow(non_snake_case)]
@@ -119,7 +118,7 @@ impl<C, GG> ConstraintSynthesizer<C::BaseField> for ZkWalletCircuit<C, GG>
 where
     C: CurveGroup,
     GG: CurveVar<C, C::BaseField>,
-    <C as CurveGroup>::BaseField: PrimeField + Absorb,
+    <C as CurveGroup>::BaseField: PrimeField,
     for<'a> &'a GG: GroupOpsBounds<'a, C, GG>,
 {
     fn generate_constraints(
@@ -127,20 +126,20 @@ where
         cs: ark_relations::r1cs::ConstraintSystemRef<C::BaseField>,
     ) -> Result<(), SynthesisError> {
         // constants
-        let poseidon_pp_1 = hashes::poseidon::constraints::CRHParametersVar::new_constant(
-            ark_relations::ns!(cs, "poseidon param 1-to-1"),
+        let poseidon_pp_1 = hashes::poseidon2::constraints::Poseidon2ParametersVar::new_constant(
+            ark_relations::ns!(cs, "poseidon2 param t=2"),
             &self.poseidon_pp_1,
         )?;
-        let poseidon_pp_2 = hashes::poseidon::constraints::CRHParametersVar::new_constant(
-            ark_relations::ns!(cs, "poseidon param 2-to-1"),
+        let poseidon_pp_2 = hashes::poseidon2::constraints::Poseidon2ParametersVar::new_constant(
+            ark_relations::ns!(cs, "poseidon2 param t=2 (2)"),
             &self.poseidon_pp_2,
         )?;
-        let poseidon_pp_4 = hashes::poseidon::constraints::CRHParametersVar::new_constant(
-            ark_relations::ns!(cs, "poseidon param 4-to-1"),
+        let poseidon_pp_4 = hashes::poseidon2::constraints::Poseidon2ParametersVar::new_constant(
+            ark_relations::ns!(cs, "poseidon2 param t=4"),
             &self.poseidon_pp_4,
         )?;
-        let poseidon_pp_8 = hashes::poseidon::constraints::CRHParametersVar::new_constant(
-            ark_relations::ns!(cs, "poseidon param 8-to-1"),
+        let poseidon_pp_8 = hashes::poseidon2::constraints::Poseidon2ParametersVar::new_constant(
+            ark_relations::ns!(cs, "poseidon2 param t=8"),
             &self.poseidon_pp_8,
         )?;
         let G = elgamal::constraints::ParametersVar::new_constant(
@@ -321,7 +320,7 @@ where
         /////////////////////////////////////////////////////////////////
         // pk_send_own <- H(sk_send_own)
         let pk_own_send =
-            CRHGadget::<C::BaseField>::evaluate(&poseidon_pp_1, &[sk.k.clone()]).unwrap();
+            Poseidon2CRHGadget::<C::BaseField>::evaluate(&poseidon_pp_1, &[sk.k.clone()]).unwrap();
         k_b.enforce_equal(&pk_own_send)?;
         /////////////////////////////////////////////////////////////////
 
@@ -330,7 +329,7 @@ where
         let pk_enc_send_point = k_u.clone().pk.to_constraint_field()?;
         let hash_input = vec![vec![k_b], pk_enc_send_point].concat();
         let result_addr_send =
-            CRHGadget::<C::BaseField>::evaluate(&poseidon_pp_4, &hash_input).unwrap();
+            Poseidon2CRHGadget::<C::BaseField>::evaluate(&poseidon_pp_4, &hash_input).unwrap();
         result_addr_send.enforce_equal(&addr)?;
         /////////////////////////////////////////////////////////////////
 
@@ -344,14 +343,14 @@ where
             result_addr_send,
         ]
         .to_vec();
-        let result_cm = CRHGadget::<C::BaseField>::evaluate(&poseidon_pp_8, &hash_input).unwrap();
+        let result_cm = Poseidon2CRHGadget::<C::BaseField>::evaluate(&poseidon_pp_8, &hash_input).unwrap();
         cm.enforce_equal(&result_cm).unwrap();
         /////////////////////////////////////////////////////////////////
 
         /////////////////////////////////////////////////////////////////
         // nf <- H(sk_send_own || cm_old)
         let hash_input = [cm.clone(), sk.clone().k].to_vec();
-        let result_sn = CRHGadget::<C::BaseField>::evaluate(&poseidon_pp_2, &hash_input).unwrap();
+        let result_sn = Poseidon2CRHGadget::<C::BaseField>::evaluate(&poseidon_pp_2, &hash_input).unwrap();
         sn.enforce_equal(&result_sn)?;
         /////////////////////////////////////////////////////////////////
 
@@ -418,7 +417,7 @@ where
 
         let hash_input = vec![vec![k_b_], pk_enc_recv_point].concat();
         let result_addr_recv =
-            CRHGadget::<C::BaseField>::evaluate(&poseidon_pp_4, &hash_input).unwrap();
+            Poseidon2CRHGadget::<C::BaseField>::evaluate(&poseidon_pp_4, &hash_input).unwrap();
         result_addr_recv.enforce_equal(&addr_r)?;
         /////////////////////////////////////////////////////////////////
 
@@ -431,7 +430,7 @@ where
             dv_.clone(),
             addr_r.clone(),
         ];
-        let result_cm_ = CRHGadget::<C::BaseField>::evaluate(&poseidon_pp_8, &hash_input).unwrap();
+        let result_cm_ = Poseidon2CRHGadget::<C::BaseField>::evaluate(&poseidon_pp_8, &hash_input).unwrap();
         cm_.enforce_equal(&result_cm_)?;
         /////////////////////////////////////////////////////////////////
 
@@ -531,10 +530,10 @@ where
 }
 
 pub struct PoseidonConfigSet<F: PrimeField> {
-    pub poseidon_pp_1: PoseidonConfig<F>,
-    pub poseidon_pp_2: PoseidonConfig<F>,
-    pub poseidon_pp_4: PoseidonConfig<F>,
-    pub poseidon_pp_8: PoseidonConfig<F>,
+    pub poseidon_pp_1: Poseidon2Params<F>,
+    pub poseidon_pp_2: Poseidon2Params<F>,
+    pub poseidon_pp_4: Poseidon2Params<F>,
+    pub poseidon_pp_8: Poseidon2Params<F>,
 }
 
 impl<F: PrimeField> Clone for PoseidonConfigSet<F> {
@@ -553,12 +552,12 @@ impl<C, GG> MockingCircuit<C, GG> for ZkWalletCircuit<C, GG>
 where
     C: CurveGroup,
     GG: CurveVar<C, C::BaseField>,
-    <C as CurveGroup>::BaseField: PrimeField + Absorb,
+    <C as CurveGroup>::BaseField: PrimeField,
     for<'a> &'a GG: GroupOpsBounds<'a, C, GG>,
 {
     type F = C::BaseField;
     type HashParam = PoseidonConfigSet<Self::F>;
-    type H = poseidon::PoseidonHash<Self::F>;
+    type H = poseidon2::Poseidon2Hash<Self::F>;
     type Output = ZkWalletCircuit<C, GG>;
 
     fn generate_circuit<R: ark_std::rand::Rng>(

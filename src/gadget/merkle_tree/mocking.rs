@@ -91,16 +91,16 @@ pub fn get_mocking_merkle_tree<T: Config<LeafDigest = F, InnerDigest = F>, F: Pr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gadget::hashes::poseidon;
-    use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
+    use crate::gadget::hashes::poseidon2::{Poseidon2Hash, Poseidon2TwoToOneCRH};
+    use crate::gadget::hashes::poseidon2::instances::bn254::get_poseidon2_bn254_t2_params;
 
     use crate::gadget::merkle_tree::{Config, IdentityDigestConverter};
 
     use ark_std::{UniformRand, Zero, test_rng};
 
     type F = ark_bn254::Fr;
-    type H = poseidon::PoseidonHash<F>;
-    type TwoToOneH = poseidon::TwoToOneCRH<F>;
+    type H = Poseidon2Hash<F>;
+    type TwoToOneH = Poseidon2TwoToOneCRH<F>;
 
     struct FieldMTConfig;
     impl Config for FieldMTConfig {
@@ -122,13 +122,10 @@ mod tests {
 
     #[test]
     fn test_get_test_root() {
-        use crate::gadget::hashes::poseidon::arkworks_parameters::bn254::poseidon_parameter_bn254_2_to_1;
-
         let mut rng = test_rng();
         let tree_height: u64 = 5;
         let leaf: F = F::rand(&mut rng);
-        let params: PoseidonConfig<F> =
-            poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into();
+        let params = get_poseidon2_bn254_t2_params();
         let leaf_hash_params = params.clone();
         let two_to_one_params = params;
         let path: Path<FieldMTConfig> = get_mocking_merkle_tree(tree_height);

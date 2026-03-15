@@ -1,4 +1,3 @@
-use ark_crypto_primitives::sponge::Absorb;
 use ark_ec::CurveGroup;
 use ark_ff::PrimeField;
 use ark_r1cs_std::prelude::{CurveVar, GroupOpsBounds};
@@ -14,7 +13,7 @@ pub trait MockingCircuit<C, GG>
 where
     C: CurveGroup,
     GG: CurveVar<C, C::BaseField>,
-    <C as CurveGroup>::BaseField: PrimeField + Absorb,
+    <C as CurveGroup>::BaseField: PrimeField,
     for<'a> &'a GG: GroupOpsBounds<'a, C, GG>,
 {
     type F;

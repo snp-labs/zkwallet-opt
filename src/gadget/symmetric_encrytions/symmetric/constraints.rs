@@ -1,4 +1,3 @@
-use ark_crypto_primitives::sponge::Absorb;
 use ark_ff::PrimeField;
 use ark_r1cs_std::{
     fields::fp::FpVar,
@@ -11,7 +10,7 @@ use super::{Ciphertext, Plaintext, Randomness, SymmetricEncryptionScheme, Symmet
 use crate::gadget::{
     hashes::{
         constraints::CRHSchemeGadget,
-        poseidon::constraints::{CRHGadget, CRHParametersVar},
+        poseidon2::constraints::{Poseidon2CRHGadget, Poseidon2ParametersVar},
     },
     symmetric_encrytions::constraints::SymmetricEncryptionGadget,
 };
@@ -146,9 +145,9 @@ where
 impl<F> SymmetricEncryptionGadget<SymmetricEncryptionScheme<F>, F>
     for SymmetricEncryptionSchemeGadget<F>
 where
-    F: PrimeField + Absorb,
+    F: PrimeField,
 {
-    type ParametersVar = CRHParametersVar<F>;
+    type ParametersVar = Poseidon2ParametersVar<F>;
 
     type RandomnessVar = RandomnessVar<F>;
     type SymmetricKeyVar = SymmetricKeyVar<F>;
@@ -165,7 +164,7 @@ where
         let k_var = k.k.clone();
         let m_var = m.m.clone();
 
-        let h = CRHGadget::<F>::evaluate(&params, &[k_var, r_var.clone()])?;
+        let h = Poseidon2CRHGadget::<F>::evaluate(&params, &[k_var, r_var.clone()])?;
         let c = h + m_var;
 
         Ok(CiphertextVar { r: r_var, c })
@@ -179,7 +178,7 @@ where
         let CiphertextVar { r, c } = ct;
         let k_var = k.k;
 
-        let h = CRHGadget::<F>::evaluate(&params, &[k_var, r])?;
+        let h = Poseidon2CRHGadget::<F>::evaluate(&params, &[k_var, r])?;
         let m = c - h;
 
         Ok(PlaintextVar { m })
@@ -189,16 +188,15 @@ where
 #[cfg(test)]
 mod tests {
     use ark_bn254::Fr;
-    use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
     use ark_r1cs_std::R1CSVar;
     use ark_r1cs_std::alloc::AllocVar;
     use ark_r1cs_std::eq::EqGadget;
     use ark_relations::r1cs::ConstraintSystem;
 
     use crate::gadget::{
-        hashes::poseidon::{
-            arkworks_parameters::bn254::poseidon_parameter_bn254_2_to_1,
-            constraints::CRHParametersVar,
+        hashes::poseidon2::{
+            instances::bn254::get_poseidon2_bn254_t2_params,
+            constraints::Poseidon2ParametersVar,
         },
         symmetric_encrytions::{
             SymmetricEncryption, constraints::SymmetricEncryptionGadget,
@@ -213,8 +211,7 @@ mod tests {
         type MyEnc = SymmetricEncryptionScheme<Fr>;
         type MyGadget = SymmetricEncryptionSchemeGadget<Fr>;
 
-        let hash_param: PoseidonConfig<Fr> =
-            poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into();
+        let hash_param = get_poseidon2_bn254_t2_params();
         let r: Fr = Fr::from(3u64);
         let k: Fr = Fr::from(3u64);
         let m: Fr = Fr::from(5u64);
@@ -260,7 +257,7 @@ mod tests {
             )
             .unwrap();
 
-        let param_var = CRHParametersVar::<Fr>::new_constant(
+        let param_var = Poseidon2ParametersVar::<Fr>::new_constant(
             ark_relations::ns!(cs, "gadget_const"),
             &hash_param,
         )

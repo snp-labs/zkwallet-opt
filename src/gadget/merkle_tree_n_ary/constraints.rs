@@ -62,8 +62,31 @@ type NToOneParam<const N: usize, PG, P, ConstraintF> =
         ConstraintF,
     >>::ParametersVar;
 
+/// Binary MUX tree to select 1 element from N items using index bits.
+/// bits[0] = LSB. For N=8, bits=[b0, b1, b2] where index = b0 + 2*b1 + 4*b2.
+/// Uses log2(N) levels of binary selection.
+fn n_ary_mux<F: PrimeField, T: CondSelectGadget<F>>(
+    items: &[T],
+    bits: &[Boolean<F>],
+) -> Result<T, SynthesisError> {
+    debug_assert!(items.len().is_power_of_two());
+    debug_assert_eq!(items.len(), 1 << bits.len());
+    let mut current: Vec<T> = items.to_vec();
+    for bit in bits {
+        let mut next = Vec::with_capacity(current.len() / 2);
+        for chunk in current.chunks(2) {
+            // bit.select(a, b) returns a if bit=1, b if bit=0
+            // We want items[index] where index is constructed from bits
+            // For each level, if bit=1, pick from upper half; if bit=0, pick from lower half
+            next.push(bit.select(&chunk[1], &chunk[0])?);
+        }
+        current = next;
+    }
+    current.into_iter().next().ok_or(SynthesisError::AssignmentMissing)
+}
+
 /// Represents a merkle tree path gadget.
-/// In an N-ary tree with OR-constraints, we store all N inputs for each level.
+/// In an N-ary tree with index-based MUX, we store index bits and use them to select the correct element.
 #[derive(Derivative)]
 #[derivative(Clone(
     bound = "P: Config<N>, ConstraintF: Field, PG: ConfigGadget<N, P, ConstraintF>"
@@ -78,6 +101,10 @@ pub struct PathVar<
     pub leaf_siblings: [PG::LeafDigest; N],
     /// The sibling of path node ordered from higher layer to lower layer (does not include root node).
     pub auth_path: Vec<[PG::InnerDigest; N]>,
+    /// Index bits for leaf level: log2(N) bits representing leaf_index % N (private witness)
+    leaf_local_index_bits: Vec<Boolean<ConstraintF>>,
+    /// Index bits for each inner level: log2(N) bits per level (private witness)
+    inner_index_bits: Vec<Vec<Boolean<ConstraintF>>>,
 }
 
 impl<const N: usize, P: Config<N>, ConstraintF: Field, PG: ConfigGadget<N, P, ConstraintF>>
@@ -115,9 +142,46 @@ impl<const N: usize, P: Config<N>, ConstraintF: Field, PG: ConfigGadget<N, P, Co
                 auth_path.push(layer_var);
             }
 
+            // Calculate index bits from leaf_index (always private witness)
+            let log_n = N.ilog2() as usize;
+
+            // Leaf level: extract log_n bits from leaf_index % N
+            let leaf_local = val.leaf_index % N;
+            let leaf_local_index_bits: Vec<Boolean<ConstraintF>> = (0..log_n)
+                .map(|i| {
+                    Boolean::new_variable(
+                        ark_relations::ns!(cs, "leaf_local_index_bit"),
+                        || Ok(((leaf_local >> i) & 1) == 1),
+                        AllocationMode::Witness,
+                    )
+                })
+                .collect::<Result<_, _>>()?;
+
+            // Inner levels: extract log_n bits for each level
+            // auth_path[j] (j=0 is top, j=auth_path_len-1 is bottom)
+            // For each level, the local index = (leaf_index >> ((auth_path_len - j) * log_n)) & (N-1)
+            let auth_path_len = val.auth_path.len();
+            let inner_index_bits: Vec<Vec<Boolean<ConstraintF>>> = (0..auth_path_len)
+                .map(|j| {
+                    let level_from_bottom = auth_path_len - j;
+                    let local = (val.leaf_index >> (level_from_bottom * log_n)) & (N - 1);
+                    (0..log_n)
+                        .map(|i| {
+                            Boolean::new_variable(
+                                ark_relations::ns!(cs, "inner_index_bit"),
+                                || Ok(((local >> i) & 1) == 1),
+                                AllocationMode::Witness,
+                            )
+                        })
+                        .collect::<Result<_, _>>()
+                })
+                .collect::<Result<_, _>>()?;
+
             Ok(PathVar {
                 auth_path,
                 leaf_siblings,
+                leaf_local_index_bits,
+                inner_index_bits,
             })
         })
     }
@@ -126,9 +190,8 @@ impl<const N: usize, P: Config<N>, ConstraintF: Field, PG: ConfigGadget<N, P, Co
 impl<const N: usize, P: Config<N>, ConstraintF: PrimeField, PG: ConfigGadget<N, P, ConstraintF>>
     PathVar<N, P, ConstraintF, PG>
 {
-    /// Internal implementation that returns both root and validity.
-    /// Calculates the root and tracks whether all OR constraints passed.
-    fn calculate_root_internal(
+    /// Original OR-constraint approach (before Index-based MUX optimization)
+    pub fn calculate_root_internal_or_constraint(
         &self,
         leaf_params: &LeafParam<N, PG, P, ConstraintF>,
         n_to_one_params: &NToOneParam<N, PG, P, ConstraintF>,
@@ -167,7 +230,6 @@ impl<const N: usize, P: Config<N>, ConstraintF: PrimeField, PG: ConfigGadget<N, 
         let mut all_valid = leaf_or_result;
 
         // 4. Traverse up the tree (from bottom to top)
-        // We use .rev() because auth_path is stored top-to-bottom (higher to lower level)
         for (_, layer) in self.auth_path.iter().rev().enumerate() {
             // OR constraint: current hash must be one of the hashes in this layer
             let mut layer_match_bits = Vec::with_capacity(N);
@@ -179,6 +241,61 @@ impl<const N: usize, P: Config<N>, ConstraintF: PrimeField, PG: ConfigGadget<N, 
 
             // AND all OR results together
             all_valid = Boolean::kary_and(&[all_valid, layer_or_result])?;
+
+            // Hash this layer to get parent hash
+            curr_hash = PG::NToOneHash::compress(n_to_one_params, layer)?;
+        }
+
+        Ok((curr_hash, all_valid))
+    }
+
+    /// Internal implementation that returns both root and validity.
+    /// Calculates the root using index-based MUX selection and verifies membership.
+    fn calculate_root_internal(
+        &self,
+        leaf_params: &LeafParam<N, PG, P, ConstraintF>,
+        n_to_one_params: &NToOneParam<N, PG, P, ConstraintF>,
+        leaf: &PG::Leaf,
+    ) -> Result<(PG::InnerDigest, Boolean<ConstraintF>), SynthesisError> {
+        // 1. Calculate leaf hash (1-to-1)
+        let claimed_leaf_hash = PG::LeafHash::evaluate(leaf_params, leaf)?;
+
+        // 2. MUX + is_eq at leaf level: select leaf at correct position and verify it matches
+        let selected_leaf = n_ary_mux(&self.leaf_siblings, &self.leaf_local_index_bits)?;
+        let leaf_valid = selected_leaf.is_eq(&claimed_leaf_hash)?;
+
+        // 3. Hash leaf level to get the first inner digest (N-to-1)
+        let converted_leaf_siblings: Vec<_> = self
+            .leaf_siblings
+            .iter()
+            .map(|node| PG::LeafInnerConverter::convert(node.clone()))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let converted_leaf_siblings_array: Vec<_> = converted_leaf_siblings
+            .into_iter()
+            .map(|node| node.borrow().clone())
+            .collect();
+
+        let converted_leaf_siblings_fixed: [_; N] = converted_leaf_siblings_array
+            .try_into()
+            .map_err(|_| SynthesisError::AssignmentMissing)?;
+
+        let mut curr_hash =
+            PG::NToOneHash::evaluate(n_to_one_params, &converted_leaf_siblings_fixed)?;
+
+        // Track validity
+        let mut all_valid = leaf_valid;
+
+        // 4. Traverse up the tree (from bottom to top)
+        // We use .rev() because auth_path is stored top-to-bottom (higher to lower level)
+        for (layer, idx_bits) in self.auth_path.iter()
+            .zip(self.inner_index_bits.iter())
+            .rev()
+        {
+            // MUX + is_eq: select element at correct index and verify it matches current hash
+            let selected = n_ary_mux(layer, idx_bits)?;
+            let level_valid = selected.is_eq(&curr_hash)?;
+            all_valid = all_valid & level_valid;
 
             // Hash this layer to get parent hash
             curr_hash = PG::NToOneHash::compress(n_to_one_params, layer)?;
@@ -221,11 +338,12 @@ impl<const N: usize, P: Config<N>, ConstraintF: PrimeField, PG: ConfigGadget<N, 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::gadget::hashes::poseidon::arkworks_parameters::bn254::{
-        poseidon_parameter_bn254_1_to_1, poseidon_parameter_bn254_8_to_1,
+    use crate::gadget::hashes::poseidon2::instances::bn254::{
+        get_poseidon2_bn254_t2_params, get_poseidon2_bn254_t4_params, get_poseidon2_bn254_t8_params,
     };
-    use crate::gadget::hashes::poseidon::constraints::{CRHGadget, NToOneCRHGadget};
-    use crate::gadget::hashes::poseidon::{NToOneCRH, PoseidonHash};
+    use crate::gadget::hashes::poseidon2::instances::bn254::get_poseidon2_bn254_t2_params as get_poseidon2_bn254_t1_params;
+    use crate::gadget::hashes::poseidon2::constraints::{Poseidon2CRHGadget as CRHGadget, Poseidon2NToOneCRHGadget as NToOneCRHGadget};
+    use crate::gadget::hashes::poseidon2::{Poseidon2NToOneCRH as NToOneCRH, Poseidon2Hash as PoseidonHash};
     use crate::gadget::merkle_tree::IdentityDigestConverter;
     use crate::gadget::merkle_tree_n_ary::{Config, MerkleTree};
     use ark_bn254::Fr;
@@ -255,8 +373,8 @@ mod test {
 
     #[test]
     fn test_merkle_tree_n_ary_gadget() {
-        let leaf_params = poseidon_parameter_bn254_1_to_1::get_poseidon_parameters().into();
-        let inner_params = poseidon_parameter_bn254_8_to_1::get_poseidon_parameters().into();
+        let leaf_params = get_poseidon2_bn254_t2_params();
+        let inner_params = get_poseidon2_bn254_t8_params();
 
         // 1. Setup native tree
         let mut leaves = Vec::new();
@@ -338,8 +456,8 @@ mod test {
                 .unwrap();
 
             assert!(
-                result.value().unwrap(),
-                "Leaf 1 should be in same chunk as leaf 0"
+                !result.value().unwrap(),
+                "Index-based: path for 0 cannot verify leaf 1"
             );
             assert!(cs.is_satisfied().unwrap());
         }
@@ -374,8 +492,8 @@ mod test {
                 .unwrap();
 
             assert!(
-                result.value().unwrap(),
-                "Leaf 7 should be in same chunk as leaf 0"
+                !result.value().unwrap(),
+                "Index-based: path for 0 cannot verify leaf 7"
             );
             assert!(cs.is_satisfied().unwrap());
         }
@@ -547,8 +665,8 @@ mod test {
         println!("║  Mock Test: ~2^33 Leaf Trees (height=11 for N=8)             ║");
         println!("╚════════════════════════════════════════════════════════════════╝\n");
 
-        let leaf_params = poseidon_parameter_bn254_1_to_1::get_poseidon_parameters().into();
-        let inner_params = poseidon_parameter_bn254_8_to_1::get_poseidon_parameters().into();
+        let leaf_params = get_poseidon2_bn254_t2_params();
+        let inner_params = get_poseidon2_bn254_t8_params();
 
         // height = 11 for N=8 (= 2^33 > 2^32)
         let height = 11;
@@ -587,6 +705,530 @@ mod test {
 
         let num_constraints = cs.num_constraints();
         println!("N=8, Height={} :", height);
+        println!("  Total constraints: {}\n", num_constraints);
+    }
+
+    #[test]
+    fn test_merkle_tree_proving_time_8ary() {
+        use std::time::Instant;
+
+        println!("\n╔════════════════════════════════════════════════════════════════╗");
+        println!("║  Constraint Generation Time: N=8 (Poseidon 8-to-1)           ║");
+        println!("╚════════════════════════════════════════════════════════════════╝\n");
+
+        let leaf_params = get_poseidon2_bn254_t2_params();
+        let inner_params = get_poseidon2_bn254_t8_params();
+
+        // Build real tree with 64 leaves
+        let mut leaves = Vec::new();
+        let num_leaves_log = 6; // 2^6 = 64 leaves
+        for i in 0..(1 << num_leaves_log) {
+            leaves.push([Fr::from(i as u64)]);
+        }
+        let tree = MerkleTree::<8, TestConfig>::new(
+            &leaf_params,
+            &inner_params,
+            leaves.iter().map(|l| &l[..]),
+        )
+        .unwrap();
+        let root = tree.root();
+        let test_index = 10;
+        let path = tree.generate_proof(test_index).unwrap();
+
+        // Measure constraint generation time
+        let start = Instant::now();
+        {
+            let cs = ConstraintSystem::<Fr>::new_ref();
+            let leaf_params_var =
+                LeafParam::<8, TestConfigGadget, TestConfig, Fr>::new_constant(
+                    ark_relations::ns!(cs, "leaf_params"),
+                    &leaf_params,
+                )
+                .unwrap();
+            let inner_params_var =
+                NToOneParam::<8, TestConfigGadget, TestConfig, Fr>::new_constant(
+                    ark_relations::ns!(cs, "inner_params"),
+                    &inner_params,
+                )
+                .unwrap();
+
+            let root_var = FpVar::<Fr>::new_witness(ark_relations::ns!(cs, "root"), || Ok(root))
+                .unwrap();
+            let leaf_var = vec![FpVar::<Fr>::new_witness(
+                ark_relations::ns!(cs, "leaf"),
+                || Ok(leaves[test_index][0]),
+            )
+            .unwrap()];
+            let path_var =
+                PathVar::<8, TestConfig, Fr, TestConfigGadget>::new_witness(
+                    ark_relations::ns!(cs, "path"),
+                    || Ok(path),
+                )
+                .unwrap();
+
+            let result = path_var
+                .verify_membership(&leaf_params_var, &inner_params_var, &root_var, &leaf_var)
+                .unwrap();
+            result.enforce_equal(&Boolean::TRUE).unwrap();
+            assert!(cs.is_satisfied().unwrap());
+        }
+        let constraint_gen_time = start.elapsed();
+        println!("N=8, 64 leaves:");
+        println!("  Constraint generation time: {:.6}s\n", constraint_gen_time.as_secs_f64());
+    }
+
+    #[test]
+    fn test_merkle_tree_proving_time_4ary() {
+        use std::time::Instant;
+
+        println!("\n╔════════════════════════════════════════════════════════════════╗");
+        println!("║  Constraint Generation Time: N=4 (Poseidon 4-to-1)           ║");
+        println!("╚════════════════════════════════════════════════════════════════╝\n");
+
+        #[derive(Clone, Copy, Debug)]
+        struct TestConfig4Ary;
+        impl Config<4> for TestConfig4Ary {
+            type Leaf = [Fr];
+            type LeafDigest = Fr;
+            type LeafInnerDigestConverter = IdentityDigestConverter<Fr>;
+            type InnerDigest = Fr;
+            type LeafHash = PoseidonHash<Fr>;
+            type NToOneHash = NToOneCRH<4, Fr>;
+        }
+
+        struct TestConfigGadget4Ary;
+        impl ConfigGadget<4, TestConfig4Ary, Fr> for TestConfigGadget4Ary {
+            type Leaf = [FpVar<Fr>];
+            type LeafDigest = FpVar<Fr>;
+            type LeafInnerConverter = IdentityDigestConverter<FpVar<Fr>>;
+            type InnerDigest = FpVar<Fr>;
+            type LeafHash = CRHGadget<Fr>;
+            type NToOneHash = NToOneCRHGadget<4, Fr>;
+        }
+
+        let leaf_params = get_poseidon2_bn254_t2_params();
+        let inner_params = get_poseidon2_bn254_t4_params();
+
+        // Build real tree with 64 leaves
+        let mut leaves = Vec::new();
+        let num_leaves_log = 6; // 2^6 = 64 leaves
+        for i in 0..(1 << num_leaves_log) {
+            leaves.push([Fr::from(i as u64)]);
+        }
+        let tree = MerkleTree::<4, TestConfig4Ary>::new(
+            &leaf_params,
+            &inner_params,
+            leaves.iter().map(|l| &l[..]),
+        )
+        .unwrap();
+        let root = tree.root();
+        let test_index = 10;
+        let path = tree.generate_proof(test_index).unwrap();
+
+        // Measure constraint generation time
+        let start = Instant::now();
+        {
+            let cs = ConstraintSystem::<Fr>::new_ref();
+            let leaf_params_var =
+                LeafParam::<4, TestConfigGadget4Ary, TestConfig4Ary, Fr>::new_constant(
+                    ark_relations::ns!(cs, "leaf_params"),
+                    &leaf_params,
+                )
+                .unwrap();
+            let inner_params_var =
+                NToOneParam::<4, TestConfigGadget4Ary, TestConfig4Ary, Fr>::new_constant(
+                    ark_relations::ns!(cs, "inner_params"),
+                    &inner_params,
+                )
+                .unwrap();
+
+            let root_var = FpVar::<Fr>::new_witness(ark_relations::ns!(cs, "root"), || Ok(root))
+                .unwrap();
+            let leaf_var = vec![FpVar::<Fr>::new_witness(
+                ark_relations::ns!(cs, "leaf"),
+                || Ok(leaves[test_index][0]),
+            )
+            .unwrap()];
+            let path_var =
+                PathVar::<4, TestConfig4Ary, Fr, TestConfigGadget4Ary>::new_witness(
+                    ark_relations::ns!(cs, "path"),
+                    || Ok(path),
+                )
+                .unwrap();
+
+            let result = path_var
+                .verify_membership(&leaf_params_var, &inner_params_var, &root_var, &leaf_var)
+                .unwrap();
+            result.enforce_equal(&Boolean::TRUE).unwrap();
+            assert!(cs.is_satisfied().unwrap());
+        }
+        let constraint_gen_time = start.elapsed();
+        println!("N=4, 64 leaves:");
+        println!("  Constraint generation time: {:.6}s\n", constraint_gen_time.as_secs_f64());
+    }
+
+    #[test]
+    fn test_merkle_tree_proving_time_or_vs_mux_8ary() {
+        use std::time::Instant;
+
+        println!("\n╔════════════════════════════════════════════════════════════════╗");
+        println!("║  Comparison: OR-constraint vs Index-based MUX (N=8)           ║");
+        println!("╚════════════════════════════════════════════════════════════════╝\n");
+
+        let leaf_params = get_poseidon2_bn254_t2_params();
+        let inner_params = get_poseidon2_bn254_t8_params();
+
+        // Build real tree with 64 leaves
+        let mut leaves = Vec::new();
+        let num_leaves_log = 6; // 2^6 = 64 leaves
+        for i in 0..(1 << num_leaves_log) {
+            leaves.push([Fr::from(i as u64)]);
+        }
+        let tree = MerkleTree::<8, TestConfig>::new(
+            &leaf_params,
+            &inner_params,
+            leaves.iter().map(|l| &l[..]),
+        )
+        .unwrap();
+        let root = tree.root();
+        let test_index = 10;
+        let path = tree.generate_proof(test_index).unwrap();
+
+        // Test 1: OR-constraint (original)
+        println!("1️⃣  OR-constraint (original):");
+        let start = Instant::now();
+        {
+            let cs = ConstraintSystem::<Fr>::new_ref();
+            let leaf_params_var =
+                LeafParam::<8, TestConfigGadget, TestConfig, Fr>::new_constant(
+                    ark_relations::ns!(cs, "leaf_params"),
+                    &leaf_params,
+                )
+                .unwrap();
+            let inner_params_var =
+                NToOneParam::<8, TestConfigGadget, TestConfig, Fr>::new_constant(
+                    ark_relations::ns!(cs, "inner_params"),
+                    &inner_params,
+                )
+                .unwrap();
+
+            let root_var = FpVar::<Fr>::new_witness(ark_relations::ns!(cs, "root"), || Ok(root))
+                .unwrap();
+            let leaf_var = vec![FpVar::<Fr>::new_witness(
+                ark_relations::ns!(cs, "leaf"),
+                || Ok(leaves[test_index][0]),
+            )
+            .unwrap()];
+
+            // Create a temporary PathVar to call OR-constraint method
+            let path_var =
+                PathVar::<8, TestConfig, Fr, TestConfigGadget>::new_witness(
+                    ark_relations::ns!(cs, "path"),
+                    || Ok(path.clone()),
+                )
+                .unwrap();
+
+            let (expected_root, is_valid_path) = path_var
+                .calculate_root_internal_or_constraint(&leaf_params_var, &inner_params_var, &leaf_var)
+                .unwrap();
+            let root_match = expected_root.is_eq(&root_var).unwrap();
+            Boolean::kary_and(&[is_valid_path, root_match]).unwrap();
+            assert!(cs.is_satisfied().unwrap());
+
+            let num_constraints = cs.num_constraints();
+            println!("   Constraints: {}", num_constraints);
+        }
+        let or_time = start.elapsed();
+        println!("   Generation time: {:.6}s\n", or_time.as_secs_f64());
+
+        // Test 2: Index-based MUX (new)
+        println!("2️⃣  Index-based MUX (optimized):");
+        let start = Instant::now();
+        {
+            let cs = ConstraintSystem::<Fr>::new_ref();
+            let leaf_params_var =
+                LeafParam::<8, TestConfigGadget, TestConfig, Fr>::new_constant(
+                    ark_relations::ns!(cs, "leaf_params"),
+                    &leaf_params,
+                )
+                .unwrap();
+            let inner_params_var =
+                NToOneParam::<8, TestConfigGadget, TestConfig, Fr>::new_constant(
+                    ark_relations::ns!(cs, "inner_params"),
+                    &inner_params,
+                )
+                .unwrap();
+
+            let root_var = FpVar::<Fr>::new_witness(ark_relations::ns!(cs, "root"), || Ok(root))
+                .unwrap();
+            let leaf_var = vec![FpVar::<Fr>::new_witness(
+                ark_relations::ns!(cs, "leaf"),
+                || Ok(leaves[test_index][0]),
+            )
+            .unwrap()];
+            let path_var =
+                PathVar::<8, TestConfig, Fr, TestConfigGadget>::new_witness(
+                    ark_relations::ns!(cs, "path"),
+                    || Ok(path.clone()),
+                )
+                .unwrap();
+
+            let result = path_var
+                .verify_membership(&leaf_params_var, &inner_params_var, &root_var, &leaf_var)
+                .unwrap();
+            result.enforce_equal(&Boolean::TRUE).unwrap();
+            assert!(cs.is_satisfied().unwrap());
+
+            let num_constraints = cs.num_constraints();
+            println!("   Constraints: {}", num_constraints);
+        }
+        let mux_time = start.elapsed();
+        println!("   Generation time: {:.6}s\n", mux_time.as_secs_f64());
+
+        // Comparison
+        println!("📊 Comparison:");
+        let constraint_reduction = ((or_time.as_secs_f64() - mux_time.as_secs_f64()) / or_time.as_secs_f64()) * 100.0;
+        println!("   Time reduction: {:.2}%", constraint_reduction);
+        if mux_time < or_time {
+            println!("   ✅ Index-based MUX is FASTER");
+        } else {
+            println!("   ❌ Index-based MUX is SLOWER");
+        }
+    }
+
+    #[test]
+    fn test_merkle_tree_proving_time_2ary() {
+        use std::time::Instant;
+
+        println!("\n╔════════════════════════════════════════════════════════════════╗");
+        println!("║  Constraint Generation Time: N=2 (Poseidon 2-to-1)           ║");
+        println!("╚════════════════════════════════════════════════════════════════╝\n");
+
+        #[derive(Clone, Copy, Debug)]
+        struct TestConfig2Ary;
+        impl Config<2> for TestConfig2Ary {
+            type Leaf = [Fr];
+            type LeafDigest = Fr;
+            type LeafInnerDigestConverter = IdentityDigestConverter<Fr>;
+            type InnerDigest = Fr;
+            type LeafHash = PoseidonHash<Fr>;
+            type NToOneHash = NToOneCRH<2, Fr>;
+        }
+
+        struct TestConfigGadget2Ary;
+        impl ConfigGadget<2, TestConfig2Ary, Fr> for TestConfigGadget2Ary {
+            type Leaf = [FpVar<Fr>];
+            type LeafDigest = FpVar<Fr>;
+            type LeafInnerConverter = IdentityDigestConverter<FpVar<Fr>>;
+            type InnerDigest = FpVar<Fr>;
+            type LeafHash = CRHGadget<Fr>;
+            type NToOneHash = NToOneCRHGadget<2, Fr>;
+        }
+
+        let leaf_params = get_poseidon2_bn254_t2_params();
+        let inner_params = get_poseidon2_bn254_t2_params();
+
+        // Build real tree with 64 leaves
+        let mut leaves = Vec::new();
+        let num_leaves_log = 6; // 2^6 = 64 leaves
+        for i in 0..(1 << num_leaves_log) {
+            leaves.push([Fr::from(i as u64)]);
+        }
+        let tree = MerkleTree::<2, TestConfig2Ary>::new(
+            &leaf_params,
+            &inner_params,
+            leaves.iter().map(|l| &l[..]),
+        )
+        .unwrap();
+        let root = tree.root();
+        let test_index = 10;
+        let path = tree.generate_proof(test_index).unwrap();
+
+        // Measure constraint generation time
+        let start = Instant::now();
+        {
+            let cs = ConstraintSystem::<Fr>::new_ref();
+            let leaf_params_var =
+                LeafParam::<2, TestConfigGadget2Ary, TestConfig2Ary, Fr>::new_constant(
+                    ark_relations::ns!(cs, "leaf_params"),
+                    &leaf_params,
+                )
+                .unwrap();
+            let inner_params_var =
+                NToOneParam::<2, TestConfigGadget2Ary, TestConfig2Ary, Fr>::new_constant(
+                    ark_relations::ns!(cs, "inner_params"),
+                    &inner_params,
+                )
+                .unwrap();
+
+            let root_var = FpVar::<Fr>::new_witness(ark_relations::ns!(cs, "root"), || Ok(root))
+                .unwrap();
+            let leaf_var = vec![FpVar::<Fr>::new_witness(
+                ark_relations::ns!(cs, "leaf"),
+                || Ok(leaves[test_index][0]),
+            )
+            .unwrap()];
+            let path_var =
+                PathVar::<2, TestConfig2Ary, Fr, TestConfigGadget2Ary>::new_witness(
+                    ark_relations::ns!(cs, "path"),
+                    || Ok(path),
+                )
+                .unwrap();
+
+            let result = path_var
+                .verify_membership(&leaf_params_var, &inner_params_var, &root_var, &leaf_var)
+                .unwrap();
+            result.enforce_equal(&Boolean::TRUE).unwrap();
+            assert!(cs.is_satisfied().unwrap());
+        }
+        let constraint_gen_time = start.elapsed();
+        println!("N=2, 64 leaves:");
+        println!("  Constraint generation time: {:.6}s\n", constraint_gen_time.as_secs_f64());
+    }
+
+    #[test]
+    fn test_merkle_tree_n_ary_2ary_2_33_leaves() {
+        println!("\n╔════════════════════════════════════════════════════════════════╗");
+        println!("║  Mock Test: ~2^33 Leaf Trees - 2-ary (height=33 for N=2)    ║");
+        println!("╚════════════════════════════════════════════════════════════════╝\n");
+
+
+        #[derive(Clone, Copy, Debug)]
+        struct TestConfig2Ary;
+        impl Config<2> for TestConfig2Ary {
+            type Leaf = [Fr];
+            type LeafDigest = Fr;
+            type LeafInnerDigestConverter = IdentityDigestConverter<Fr>;
+            type InnerDigest = Fr;
+            type LeafHash = PoseidonHash<Fr>;
+            type NToOneHash = NToOneCRH<2, Fr>;
+        }
+
+        struct TestConfigGadget2Ary;
+        impl ConfigGadget<2, TestConfig2Ary, Fr> for TestConfigGadget2Ary {
+            type Leaf = [FpVar<Fr>];
+            type LeafDigest = FpVar<Fr>;
+            type LeafInnerConverter = IdentityDigestConverter<FpVar<Fr>>;
+            type InnerDigest = FpVar<Fr>;
+            type LeafHash = CRHGadget<Fr>;
+            type NToOneHash = NToOneCRHGadget<2, Fr>;
+        }
+
+        let leaf_params = get_poseidon2_bn254_t2_params();
+        let inner_params = get_poseidon2_bn254_t2_params();
+
+        // height = 33 for N=2 (= 2^33)
+        let height = 33;
+        let auth_path_layers = height - 1; // 32 layers
+
+        // Create mock path with dummy values
+        let mock_path = Path::<2, TestConfig2Ary> {
+            leaf_siblings: [Fr::from(1u64); 2],
+            auth_path: vec![[Fr::from(1u64); 2]; auth_path_layers],
+            leaf_index: 0,
+        };
+
+        let cs = ConstraintSystem::<Fr>::new_ref();
+        let leaf_params_var =
+            LeafParam::<2, TestConfigGadget2Ary, TestConfig2Ary, Fr>::new_constant(
+                cs.clone(),
+                &leaf_params,
+            )
+            .unwrap();
+        let inner_params_var =
+            NToOneParam::<2, TestConfigGadget2Ary, TestConfig2Ary, Fr>::new_constant(
+                cs.clone(),
+                &inner_params,
+            )
+            .unwrap();
+
+        let root_var = FpVar::<Fr>::new_witness(cs.clone(), || Ok(Fr::from(1u64))).unwrap();
+        let leaf_var = vec![FpVar::<Fr>::new_witness(cs.clone(), || Ok(Fr::from(1u64))).unwrap()];
+        let path_var =
+            PathVar::<2, TestConfig2Ary, Fr, TestConfigGadget2Ary>::new_witness(cs.clone(), || {
+                Ok(mock_path)
+            })
+            .unwrap();
+
+        let _result = path_var
+            .verify_membership(&leaf_params_var, &inner_params_var, &root_var, &leaf_var)
+            .unwrap();
+
+        let num_constraints = cs.num_constraints();
+        println!("N=2, Height={} :", height);
+        println!("  Total constraints: {}\n", num_constraints);
+    }
+
+    #[test]
+    fn test_merkle_tree_n_ary_4ary_2_33_leaves() {
+        println!("\n╔════════════════════════════════════════════════════════════════╗");
+        println!("║  Mock Test: ~2^33 Leaf Trees - 4-ary (height=17 for N=4)    ║");
+        println!("╚════════════════════════════════════════════════════════════════╝\n");
+
+
+        #[derive(Clone, Copy, Debug)]
+        struct TestConfig4Ary;
+        impl Config<4> for TestConfig4Ary {
+            type Leaf = [Fr];
+            type LeafDigest = Fr;
+            type LeafInnerDigestConverter = IdentityDigestConverter<Fr>;
+            type InnerDigest = Fr;
+            type LeafHash = PoseidonHash<Fr>;
+            type NToOneHash = NToOneCRH<4, Fr>;
+        }
+
+        struct TestConfigGadget4Ary;
+        impl ConfigGadget<4, TestConfig4Ary, Fr> for TestConfigGadget4Ary {
+            type Leaf = [FpVar<Fr>];
+            type LeafDigest = FpVar<Fr>;
+            type LeafInnerConverter = IdentityDigestConverter<FpVar<Fr>>;
+            type InnerDigest = FpVar<Fr>;
+            type LeafHash = CRHGadget<Fr>;
+            type NToOneHash = NToOneCRHGadget<4, Fr>;
+        }
+
+        let leaf_params = get_poseidon2_bn254_t2_params();
+        let inner_params = get_poseidon2_bn254_t4_params();
+
+        // height = 17 for N=4 (= 4^16.5 ≈ 2^33)
+        let height = 17;
+        let auth_path_layers = height - 1; // 16 layers
+
+        // Create mock path with dummy values
+        let mock_path = Path::<4, TestConfig4Ary> {
+            leaf_siblings: [Fr::from(1u64); 4],
+            auth_path: vec![[Fr::from(1u64); 4]; auth_path_layers],
+            leaf_index: 0,
+        };
+
+        let cs = ConstraintSystem::<Fr>::new_ref();
+        let leaf_params_var =
+            LeafParam::<4, TestConfigGadget4Ary, TestConfig4Ary, Fr>::new_constant(
+                cs.clone(),
+                &leaf_params,
+            )
+            .unwrap();
+        let inner_params_var =
+            NToOneParam::<4, TestConfigGadget4Ary, TestConfig4Ary, Fr>::new_constant(
+                cs.clone(),
+                &inner_params,
+            )
+            .unwrap();
+
+        let root_var = FpVar::<Fr>::new_witness(cs.clone(), || Ok(Fr::from(1u64))).unwrap();
+        let leaf_var = vec![FpVar::<Fr>::new_witness(cs.clone(), || Ok(Fr::from(1u64))).unwrap()];
+        let path_var =
+            PathVar::<4, TestConfig4Ary, Fr, TestConfigGadget4Ary>::new_witness(cs.clone(), || {
+                Ok(mock_path)
+            })
+            .unwrap();
+
+        let _result = path_var
+            .verify_membership(&leaf_params_var, &inner_params_var, &root_var, &leaf_var)
+            .unwrap();
+
+        let num_constraints = cs.num_constraints();
+        println!("N=4, Height={} :", height);
         println!("  Total constraints: {}\n", num_constraints);
     }
 }

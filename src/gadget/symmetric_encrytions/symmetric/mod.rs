@@ -1,13 +1,11 @@
 use crate::Error;
-use ark_crypto_primitives::sponge::Absorb;
-use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
 use ark_ff::Field;
 use std::marker::PhantomData;
 
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
 use super::SymmetricEncryption;
-use crate::gadget::hashes::{CRHScheme, poseidon::PoseidonHash};
+use crate::gadget::hashes::{CRHScheme, poseidon2::{Poseidon2Hash, params::Poseidon2Params}};
 
 pub mod constraints;
 
@@ -38,9 +36,9 @@ pub struct SymmetricEncryptionScheme<F: Field> {
 
 impl<F> SymmetricEncryption for SymmetricEncryptionScheme<F>
 where
-    F: ark_ff::PrimeField + Absorb,
+    F: ark_ff::PrimeField,
 {
-    type Parameters = PoseidonConfig<F>;
+    type Parameters = Poseidon2Params<F>;
 
     type Randomness = Randomness<F>;
     type SymmetricKey = SymmetricKey<F>;
@@ -62,7 +60,7 @@ where
         let k = k.k;
         let m = m.m;
 
-        let h = PoseidonHash::<F>::evaluate(&hash_param, [k, r].as_ref())?;
+        let h = Poseidon2Hash::<F>::evaluate(&hash_param, [k, r].as_ref())?;
         let c = h + m;
 
         Ok(Ciphertext { r, c })
@@ -77,7 +75,7 @@ where
         let Ciphertext { r, c } = ct;
         let k = k.k;
 
-        let h = PoseidonHash::<F>::evaluate(&hash_param, [k, r].as_ref())?;
+        let h = Poseidon2Hash::<F>::evaluate(&hash_param, [k, r].as_ref())?;
         let m = c - h;
 
         Ok(Plaintext { m })
@@ -87,10 +85,9 @@ where
 #[cfg(test)]
 mod tests {
     use ark_bn254::Fr;
-    use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
 
     use crate::gadget::{
-        hashes::poseidon::arkworks_parameters::bn254::poseidon_parameter_bn254_2_to_1,
+        hashes::poseidon2::instances::bn254::get_poseidon2_bn254_t2_params,
         symmetric_encrytions::SymmetricEncryption,
     };
 
@@ -98,8 +95,7 @@ mod tests {
 
     #[test]
     fn test_semmetic_encryption() {
-        let hash_param: PoseidonConfig<Fr> =
-            poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into();
+        let hash_param = get_poseidon2_bn254_t2_params();
         let r: Fr = Fr::from(3u64);
         let k: Fr = Fr::from(3u64);
         let m: Fr = Fr::from(5u64);

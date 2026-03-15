@@ -27,24 +27,23 @@ mod test {
     use crate::gadget::public_encryptions::elgamal::ElGamal;
 
     use crate::gadget::hashes::CRHScheme;
-    use crate::gadget::hashes::poseidon;
-    use crate::gadget::hashes::poseidon::arkworks_parameters::bn254::{
-        poseidon_parameter_bn254_1_to_1, poseidon_parameter_bn254_2_to_1,
-        poseidon_parameter_bn254_4_to_1, poseidon_parameter_bn254_8_to_1,
+    use crate::gadget::hashes::poseidon2::Poseidon2Hash;
+    use crate::gadget::hashes::poseidon2::instances::bn254::{
+        get_poseidon2_bn254_t2_params, get_poseidon2_bn254_t4_params, get_poseidon2_bn254_t8_params,
     };
 
     type C = ark_ed_on_bn254::EdwardsProjective;
     type GG = ark_ed_on_bn254::constraints::EdwardsVar;
 
     type F = ark_bn254::Fr;
-    type H = poseidon::PoseidonHash<F>;
+    type H = Poseidon2Hash<F>;
 
     fn get_poseidon_config_set() -> PoseidonConfigSet<F> {
         PoseidonConfigSet {
-            poseidon_pp_1: poseidon_parameter_bn254_1_to_1::get_poseidon_parameters().into(),
-            poseidon_pp_2: poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into(),
-            poseidon_pp_4: poseidon_parameter_bn254_4_to_1::get_poseidon_parameters().into(),
-            poseidon_pp_8: poseidon_parameter_bn254_8_to_1::get_poseidon_parameters().into(),
+            poseidon_pp_1: get_poseidon2_bn254_t2_params(),
+            poseidon_pp_2: get_poseidon2_bn254_t2_params(),
+            poseidon_pp_4: get_poseidon2_bn254_t4_params(),
+            poseidon_pp_8: get_poseidon2_bn254_t8_params(),
         }
     }
 

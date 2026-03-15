@@ -17,9 +17,8 @@ mod test {
     use crate::zkwallet;
     use crate::zkwallet::circuit::{PoseidonConfigSet, ZkWalletCircuit};
 
-    use crate::gadget::hashes::poseidon::arkworks_parameters::bn254::{
-        poseidon_parameter_bn254_1_to_1, poseidon_parameter_bn254_2_to_1,
-        poseidon_parameter_bn254_4_to_1, poseidon_parameter_bn254_8_to_1,
+    use crate::gadget::hashes::poseidon2::instances::bn254::{
+        get_poseidon2_bn254_t2_params, get_poseidon2_bn254_t4_params, get_poseidon2_bn254_t8_params,
     };
 
     // type C = ark_bn254::G1Projective;
@@ -44,10 +43,40 @@ mod test {
 
     fn get_poseidon_config_set() -> PoseidonConfigSet<F> {
         PoseidonConfigSet {
-            poseidon_pp_1: poseidon_parameter_bn254_1_to_1::get_poseidon_parameters().into(),
-            poseidon_pp_2: poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into(),
-            poseidon_pp_4: poseidon_parameter_bn254_4_to_1::get_poseidon_parameters().into(),
-            poseidon_pp_8: poseidon_parameter_bn254_8_to_1::get_poseidon_parameters().into(),
+            poseidon_pp_1: get_poseidon2_bn254_t2_params(),
+            poseidon_pp_2: get_poseidon2_bn254_t2_params(),
+            poseidon_pp_4: get_poseidon2_bn254_t4_params(),
+            poseidon_pp_8: get_poseidon2_bn254_t8_params(),
+        }
+    }
+
+    fn get_poseidon_config_set_1_8() -> PoseidonConfigSet<F> {
+        // Test: using t=2 for leaf hash, t=8 for everything else
+        PoseidonConfigSet {
+            poseidon_pp_1: get_poseidon2_bn254_t2_params(),
+            poseidon_pp_2: get_poseidon2_bn254_t8_params(),
+            poseidon_pp_4: get_poseidon2_bn254_t8_params(),
+            poseidon_pp_8: get_poseidon2_bn254_t8_params(),
+        }
+    }
+
+    fn get_poseidon_config_set_1_2_8() -> PoseidonConfigSet<F> {
+        // Test: using t=2 for leaf/2-input, t=8 for 4/8-input
+        PoseidonConfigSet {
+            poseidon_pp_1: get_poseidon2_bn254_t2_params(),
+            poseidon_pp_2: get_poseidon2_bn254_t2_params(),
+            poseidon_pp_4: get_poseidon2_bn254_t8_params(),
+            poseidon_pp_8: get_poseidon2_bn254_t8_params(),
+        }
+    }
+
+    fn get_poseidon_config_set_1_4_8() -> PoseidonConfigSet<F> {
+        // Test: using t=2 for leaf, t=4 for 3-input, t=8 for 5+/NToOne-input
+        PoseidonConfigSet {
+            poseidon_pp_1: get_poseidon2_bn254_t2_params(),
+            poseidon_pp_2: get_poseidon2_bn254_t8_params(),
+            poseidon_pp_4: get_poseidon2_bn254_t4_params(),
+            poseidon_pp_8: get_poseidon2_bn254_t8_params(),
         }
     }
 
@@ -67,14 +96,13 @@ mod test {
 
         let cs = ark_relations::r1cs::ConstraintSystem::new_ref();
 
-        // Weight optimization goal is fastest for Inlining LCs phase
         use ark_relations::r1cs::OptimizationGoal;
-        cs.set_optimization_goal(OptimizationGoal::Weight);
+        cs.set_optimization_goal(OptimizationGoal::Constraints);
 
         test_input.clone().generate_constraints(cs.clone()).unwrap();
         assert!(cs.is_satisfied().unwrap());
         println!("Number of constraints: {}", cs.num_constraints());
-        println!("Optimization Goal: Weight");
+        println!("Optimization Goal: Constraints");
     }
 
     #[test]
@@ -160,4 +188,214 @@ mod test {
         println!("Average proving time: {:?} seconds", proving_avg);
         println!("Average verifying time: {:?} seconds", verifying_avg);
     }
+
+    // #[test]
+    // fn test_zkwallet_circuit_groth16_1_8() {
+    //     // Test: using only 1-1 and 8-1 parameters
+    //     let mut rng = ark_std::rand::rngs::StdRng::seed_from_u64(test_rng().next_u64());
+    //     println!("\n=== Test with Parameters (1-1, 8-1) ===");
+    //     let hash_param = get_poseidon_config_set_1_8();
+
+    //     let test_input =
+    //         <ZkWalletCircuit<C, GG> as zkwallet::MockingCircuit<C, GG>>::generate_circuit(
+    //             hash_param, 11, &mut rng,
+    //         )
+    //         .unwrap();
+
+    //     println!("Generate CRS!");
+    //     let (pk, vk) = {
+    //         let c = test_input.clone();
+    //         Groth16::<Bn254>::setup(c, &mut rng).unwrap()
+    //     };
+
+    //     println!("Prepared verifying key!");
+    //     let pvk = Groth16::<Bn254>::process_vk(&vk).unwrap();
+
+    //     const SAMPLES: u32 = 1;
+    //     let mut total_proving = Duration::new(0, 0);
+
+    //     for _ in 0..SAMPLES {
+    //         let mut image: Vec<_> = vec![
+    //             test_input.apk.unwrap().x().unwrap(),
+    //             test_input.apk.unwrap().y().unwrap(),
+    //         ];
+    //         image.append(&mut test_input.cin.clone().unwrap());
+    //         image.append(&mut vec![
+    //             test_input.rt.unwrap(),
+    //             test_input.sn.unwrap(),
+    //             test_input.addr.unwrap(),
+    //             test_input.k_b.unwrap(),
+    //             test_input.k_u.unwrap().x().unwrap(),
+    //             test_input.k_u.unwrap().y().unwrap(),
+    //             test_input.cm_.unwrap(),
+    //         ]);
+    //         image.append(&mut test_input.cout.clone().unwrap());
+    //         image.append(&mut vec![
+    //             test_input.pv.unwrap(),
+    //             test_input.pv_.unwrap(),
+    //             test_input.tk_addr_.unwrap(),
+    //             test_input.tk_id_.unwrap(),
+    //             test_input.G_r.unwrap().x().unwrap(),
+    //             test_input.G_r.unwrap().y().unwrap(),
+    //             test_input.K_u.unwrap().x().unwrap(),
+    //             test_input.K_u.unwrap().y().unwrap(),
+    //             test_input.K_a.unwrap().x().unwrap(),
+    //             test_input.K_a.unwrap().y().unwrap(),
+    //         ]);
+    //         image.append(&mut test_input.CT.clone().unwrap());
+
+    //         let start = Instant::now();
+    //         let c = test_input.clone();
+    //         println!("Generate proof!");
+    //         let proof = Groth16::<Bn254>::prove(&pk, c.clone(), &mut rng).unwrap();
+    //         assert!(Groth16::<Bn254>::verify_with_processed_vk(&pvk, &image, &proof).unwrap());
+    //         total_proving += start.elapsed();
+    //     }
+
+    //     let proving_avg = total_proving / SAMPLES;
+    //     let proving_avg =
+    //         proving_avg.subsec_nanos() as f64 / 1_000_000_000f64 + (proving_avg.as_secs() as f64);
+
+    //     println!("Average proving time (1-1, 8-1): {:.9} seconds", proving_avg);
+    // }
+
+    // #[test]
+    // fn test_zkwallet_circuit_groth16_1_2_8() {
+    //     // Test: using 1-1, 2-1, and 8-1 parameters
+    //     let mut rng = ark_std::rand::rngs::StdRng::seed_from_u64(test_rng().next_u64());
+    //     println!("\n=== Test with Parameters (1-1, 2-1, 8-1) ===");
+    //     let hash_param = get_poseidon_config_set_1_2_8();
+
+    //     let test_input =
+    //         <ZkWalletCircuit<C, GG> as zkwallet::MockingCircuit<C, GG>>::generate_circuit(
+    //             hash_param, 11, &mut rng,
+    //         )
+    //         .unwrap();
+
+    //     println!("Generate CRS!");
+    //     let (pk, vk) = {
+    //         let c = test_input.clone();
+    //         Groth16::<Bn254>::setup(c, &mut rng).unwrap()
+    //     };
+
+    //     println!("Prepared verifying key!");
+    //     let pvk = Groth16::<Bn254>::process_vk(&vk).unwrap();
+
+    //     const SAMPLES: u32 = 1;
+    //     let mut total_proving = Duration::new(0, 0);
+
+    //     for _ in 0..SAMPLES {
+    //         let mut image: Vec<_> = vec![
+    //             test_input.apk.unwrap().x().unwrap(),
+    //             test_input.apk.unwrap().y().unwrap(),
+    //         ];
+    //         image.append(&mut test_input.cin.clone().unwrap());
+    //         image.append(&mut vec![
+    //             test_input.rt.unwrap(),
+    //             test_input.sn.unwrap(),
+    //             test_input.addr.unwrap(),
+    //             test_input.k_b.unwrap(),
+    //             test_input.k_u.unwrap().x().unwrap(),
+    //             test_input.k_u.unwrap().y().unwrap(),
+    //             test_input.cm_.unwrap(),
+    //         ]);
+    //         image.append(&mut test_input.cout.clone().unwrap());
+    //         image.append(&mut vec![
+    //             test_input.pv.unwrap(),
+    //             test_input.pv_.unwrap(),
+    //             test_input.tk_addr_.unwrap(),
+    //             test_input.tk_id_.unwrap(),
+    //             test_input.G_r.unwrap().x().unwrap(),
+    //             test_input.G_r.unwrap().y().unwrap(),
+    //             test_input.K_u.unwrap().x().unwrap(),
+    //             test_input.K_u.unwrap().y().unwrap(),
+    //             test_input.K_a.unwrap().x().unwrap(),
+    //             test_input.K_a.unwrap().y().unwrap(),
+    //         ]);
+    //         image.append(&mut test_input.CT.clone().unwrap());
+
+    //         let start = Instant::now();
+    //         let c = test_input.clone();
+    //         println!("Generate proof!");
+    //         let proof = Groth16::<Bn254>::prove(&pk, c.clone(), &mut rng).unwrap();
+    //         assert!(Groth16::<Bn254>::verify_with_processed_vk(&pvk, &image, &proof).unwrap());
+    //         total_proving += start.elapsed();
+    //     }
+
+    //     let proving_avg = total_proving / SAMPLES;
+    //     let proving_avg =
+    //         proving_avg.subsec_nanos() as f64 / 1_000_000_000f64 + (proving_avg.as_secs() as f64);
+
+    //     println!("Average proving time (1-1, 2-1, 8-1): {:.9} seconds", proving_avg);
+    // }
+
+    // #[test]
+    // fn test_zkwallet_circuit_groth16_1_4_8() {
+    //     // Test: using 1-1, 4-1, and 8-1 parameters
+    //     let mut rng = ark_std::rand::rngs::StdRng::seed_from_u64(test_rng().next_u64());
+    //     println!("\n=== Test with Parameters (1-1, 4-1, 8-1) ===");
+    //     let hash_param = get_poseidon_config_set_1_4_8();
+
+    //     let test_input =
+    //         <ZkWalletCircuit<C, GG> as zkwallet::MockingCircuit<C, GG>>::generate_circuit(
+    //             hash_param, 11, &mut rng,
+    //         )
+    //         .unwrap();
+
+    //     println!("Generate CRS!");
+    //     let (pk, vk) = {
+    //         let c = test_input.clone();
+    //         Groth16::<Bn254>::setup(c, &mut rng).unwrap()
+    //     };
+
+    //     println!("Prepared verifying key!");
+    //     let pvk = Groth16::<Bn254>::process_vk(&vk).unwrap();
+
+    //     const SAMPLES: u32 = 1;
+    //     let mut total_proving = Duration::new(0, 0);
+
+    //     for _ in 0..SAMPLES {
+    //         let mut image: Vec<_> = vec![
+    //             test_input.apk.unwrap().x().unwrap(),
+    //             test_input.apk.unwrap().y().unwrap(),
+    //         ];
+    //         image.append(&mut test_input.cin.clone().unwrap());
+    //         image.append(&mut vec![
+    //             test_input.rt.unwrap(),
+    //             test_input.sn.unwrap(),
+    //             test_input.addr.unwrap(),
+    //             test_input.k_b.unwrap(),
+    //             test_input.k_u.unwrap().x().unwrap(),
+    //             test_input.k_u.unwrap().y().unwrap(),
+    //             test_input.cm_.unwrap(),
+    //         ]);
+    //         image.append(&mut test_input.cout.clone().unwrap());
+    //         image.append(&mut vec![
+    //             test_input.pv.unwrap(),
+    //             test_input.pv_.unwrap(),
+    //             test_input.tk_addr_.unwrap(),
+    //             test_input.tk_id_.unwrap(),
+    //             test_input.G_r.unwrap().x().unwrap(),
+    //             test_input.G_r.unwrap().y().unwrap(),
+    //             test_input.K_u.unwrap().x().unwrap(),
+    //             test_input.K_u.unwrap().y().unwrap(),
+    //             test_input.K_a.unwrap().x().unwrap(),
+    //             test_input.K_a.unwrap().y().unwrap(),
+    //         ]);
+    //         image.append(&mut test_input.CT.clone().unwrap());
+
+    //         let start = Instant::now();
+    //         let c = test_input.clone();
+    //         println!("Generate proof!");
+    //         let proof = Groth16::<Bn254>::prove(&pk, c.clone(), &mut rng).unwrap();
+    //         assert!(Groth16::<Bn254>::verify_with_processed_vk(&pvk, &image, &proof).unwrap());
+    //         total_proving += start.elapsed();
+    //     }
+
+    //     let proving_avg = total_proving / SAMPLES;
+    //     let proving_avg =
+    //         proving_avg.subsec_nanos() as f64 / 1_000_000_000f64 + (proving_avg.as_secs() as f64);
+
+    //     println!("Average proving time (1-1, 4-1, 8-1): {:.9} seconds", proving_avg);
+    // }
 }
