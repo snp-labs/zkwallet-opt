@@ -1,0 +1,3 @@
+[submodule "vendor/zkpasskey"]
+	path = vendor/zkpasskey
+	url = https://github.com/snp-labs/zkpasskey
