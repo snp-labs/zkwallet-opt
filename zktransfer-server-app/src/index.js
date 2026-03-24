@@ -7,8 +7,19 @@ import { CustodyOrchestrator } from "./services/custodyOrchestrator.js";
 import { LocalChainService } from "./services/localChainService.js";
 import { ProfileService } from "./services/profileService.js";
 import { ZkPasskeyService } from "./services/zkpasskeyService.js";
+import { ZkPasskeyRelayerService } from "./services/zkpasskeyRelayerService.js";
 
 const config = loadConfig();
+const readinessIssues = [];
+if (!config.proofBinaryExists) {
+  readinessIssues.push(`missing proof binary: ${config.proofBinaryPath}`);
+}
+if (!config.proofInputBuilderExists) {
+  readinessIssues.push(`missing proof input builder: ${config.proofInputBuilderPath}`);
+}
+if (readinessIssues.length > 0) {
+  console.warn(`[${config.appName}] readiness warning: ${readinessIssues.join("; ")}`);
+}
 const store = new JobStore(config.dataFile);
 await store.init();
 
@@ -30,6 +41,7 @@ const localChainService = new LocalChainService({
 const zkpasskeyService = new ZkPasskeyService({
   config,
   store,
+  relayerService: new ZkPasskeyRelayerService({ config }),
 });
 
 const orchestrator = new CustodyOrchestrator({

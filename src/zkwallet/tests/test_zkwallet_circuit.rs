@@ -48,6 +48,9 @@ mod test {
             poseidon_pp_2: poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into(),
             poseidon_pp_4: poseidon_parameter_bn254_4_to_1::get_poseidon_parameters().into(),
             poseidon_pp_8: poseidon_parameter_bn254_8_to_1::get_poseidon_parameters().into(),
+            membership_poseidon2_pp_3: crate::gadget::hashes::poseidon2::bn254_width3_parameters(),
+            membership_poseidon2_pp_4:
+                crate::gadget::hashes::poseidon2_width4::bn254_width4_parameters(),
         }
     }
 
@@ -69,7 +72,27 @@ mod test {
 
         test_input.clone().generate_constraints(cs.clone()).unwrap();
         assert!(cs.is_satisfied().unwrap());
+        cs.finalize();
         println!("Number of constraints: {}", cs.num_constraints());
+
+        let matrices = cs.to_matrices().unwrap();
+        let avg_a = matrices.a_num_non_zero as f64 / matrices.num_constraints as f64;
+        let avg_b = matrices.b_num_non_zero as f64 / matrices.num_constraints as f64;
+        let avg_c = matrices.c_num_non_zero as f64 / matrices.num_constraints as f64;
+        let max_a = matrices.a.iter().map(|row| row.len()).max().unwrap_or(0);
+        let max_b = matrices.b.iter().map(|row| row.len()).max().unwrap_or(0);
+        let max_c = matrices.c.iter().map(|row| row.len()).max().unwrap_or(0);
+
+        println!("Instance variables: {}", matrices.num_instance_variables);
+        println!("Witness variables: {}", matrices.num_witness_variables);
+        println!("A non-zero entries: {}", matrices.a_num_non_zero);
+        println!("B non-zero entries: {}", matrices.b_num_non_zero);
+        println!("C non-zero entries: {}", matrices.c_num_non_zero);
+        println!(
+            "Average row density (A, B, C): {:.2}, {:.2}, {:.2}",
+            avg_a, avg_b, avg_c
+        );
+        println!("Max row density (A, B, C): {}, {}, {}", max_a, max_b, max_c);
     }
 
     #[test]
@@ -94,8 +117,8 @@ mod test {
         println!("Prepared verifying key!");
         let pvk = Groth16::<Bn254>::process_vk(&vk).unwrap();
 
-        // Let's benchmark stuff!
-        const SAMPLES: u32 = 1;
+        // Benchmark proving and verification separately.
+        const SAMPLES: u32 = 5;
         let mut total_proving = Duration::new(0, 0);
         let mut total_verifying = Duration::new(0, 0);
 
@@ -129,18 +152,15 @@ mod test {
             ]);
             image.append(&mut test_input.CT.clone().unwrap());
 
+            let c = test_input.clone();
+
+            println!("Generate proof!");
             let start = Instant::now();
-            {
-                let c = test_input.clone();
-
-                println!("Generate proof!");
-                let proof = Groth16::<Bn254>::prove(&pk, c.clone(), &mut rng).unwrap();
-
-                assert!(Groth16::<Bn254>::verify_with_processed_vk(&pvk, &image, &proof).unwrap());
-            }
-
+            let proof = Groth16::<Bn254>::prove(&pk, c, &mut rng).unwrap();
             total_proving += start.elapsed();
+
             let start = Instant::now();
+            assert!(Groth16::<Bn254>::verify_with_processed_vk(&pvk, &image, &proof).unwrap());
             total_verifying += start.elapsed();
         }
 

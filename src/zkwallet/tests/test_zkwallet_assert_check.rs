@@ -40,6 +40,9 @@ mod test {
             poseidon_pp_2: poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into(),
             poseidon_pp_4: poseidon_parameter_bn254_4_to_1::get_poseidon_parameters().into(),
             poseidon_pp_8: poseidon_parameter_bn254_8_to_1::get_poseidon_parameters().into(),
+            membership_poseidon2_pp_3: crate::gadget::hashes::poseidon2::bn254_width3_parameters(),
+            membership_poseidon2_pp_4:
+                crate::gadget::hashes::poseidon2_width4::bn254_width4_parameters(),
         }
     }
 

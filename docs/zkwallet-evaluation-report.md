@@ -3,6 +3,18 @@
 > 작성일: 2026-03-16
 > 대상: zkWallet 프로젝트 전체 (ZK 회로, 모바일 앱, 커스터디 서버, 클라이언트 앱)
 
+## 2026-03-23 업데이트
+
+- 루트 `src/zkwallet` 회로의 membership proof는 이제 `Poseidon2 + 4-ary Merkle Tree + OR-constraints`를 사용한다.
+- 루트 회로에는 음수 잔액이 필드에서 큰 수로 랩어라운드되는 문제를 막는 balance/range check가 추가되었다.
+- `zk-wallet-circuits/` 하위 proving 바이너리에도 음수 랩어라운드 방지 제약은 반영되었다.
+- `zk-wallet-circuits/` 하위 proving 바이너리와 demo input builder도 현재는 `Poseidon2 + 4-ary membership` 경로로 올라왔다.
+- commitment/nullifier/address hash와 symmetric note encryption도 Poseidon 경로로 맞춰져, 런타임 crypto profile은 사실상 정렬되었다.
+- witness JSON의 `leaf_pos` 출력은 제거됐고, 현재 남은 정리 포인트는 legacy 입력 허용 기간과 서버 fixture 계약이다.
+- 다만 `zktransfer-custody-platform/crates/zk-wallet-circuits` 는 아직 binary Merkle + `leaf_pos` 기반 레거시 crate로 남아 있다.
+- 레거시 crate 제거 계획과 cutover 기준은 [docs/legacy-zkwallet-circuits-deprecation-plan-2026-03-23.md](/Users/hyunokoh/Documents/zkWallet/docs/legacy-zkwallet-circuits-deprecation-plan-2026-03-23.md) 에 기록했다.
+- 최신 상세 상태는 [docs/zkwallet-crypto-profile-2026-03-23.md](/Users/hyunokoh/Documents/zkWallet/docs/zkwallet-crypto-profile-2026-03-23.md) 를 참고.
+
 ---
 
 ## 1. 아키텍처 개요
@@ -23,7 +35,7 @@
 - **널리파이어 (이중지불 방지)**: `sn = Poseidon_2(cm_old, sk_send_own)`
 - **송신자 노트 암호화**: 대칭 암호화 (OTP via Poseidon)
 - **수신자 노트 암호화**: ElGamal 비대칭 암호화
-- **멤버십 증명**: 8-ary Merkle Tree + OR-constraints (인덱스 비공개)
+- **멤버십 증명**: Poseidon2 기반 4-ary Merkle Tree + OR-constraints (인덱스 비공개)
 
 ---
 

@@ -16,10 +16,19 @@ function normalizeTokenId(request) {
 }
 
 export class CustodyOrchestrator {
-  constructor({ config, store, localChainService }) {
+  constructor({
+    config,
+    store,
+    localChainService,
+    execFileRunner = execFileAsync,
+    logger = console
+  }) {
     this.config = config;
     this.store = store;
     this.localChainService = localChainService;
+    this.execFileRunner = execFileRunner;
+    this.logger = logger;
+    this.proofInputTelemetry = createProofInputTelemetry();
   }
 
   async enqueue(requestRecord) {
@@ -98,6 +107,7 @@ export class CustodyOrchestrator {
 
   async generateProof(executionPlan) {
     const proofInput = await this.buildProofInput(executionPlan);
+    const inputContract = this.getProofInputTelemetry().lastInputContract;
     const args = [
       "--request-id",
       executionPlan.requestId,
@@ -109,7 +119,7 @@ export class CustodyOrchestrator {
       args.push("--crs-path", this.config.proofCrsPath);
     }
 
-    const { stdout } = await execFileAsync(this.config.proofBinaryPath, args, {
+    const { stdout } = await this.execFileRunner(this.config.proofBinaryPath, args, {
       cwd: this.config.circuitsRoot,
       timeout: this.config.proofTimeoutMs,
       maxBuffer: 8 * 1024 * 1024
@@ -132,7 +142,8 @@ export class CustodyOrchestrator {
         setupSource: proofExecution.setup_source,
         proofGenerationSeconds: proofExecution.proof_generation_seconds,
         verificationSeconds: proofExecution.verification_seconds,
-        treeHeight: this.config.proofTreeHeight
+        treeHeight: this.config.proofTreeHeight,
+        inputContract
       },
       proofArtifact: {
         ...proofExecution,
@@ -160,12 +171,49 @@ export class CustodyOrchestrator {
       "--private-out",
       String(executionPlan.amountToPrivate ?? "0")
     ];
-    const { stdout } = await execFileAsync(this.config.proofInputBuilderPath, args, {
+    const { stdout } = await this.execFileRunner(this.config.proofInputBuilderPath, args, {
       cwd: this.config.circuitsRoot,
       timeout: this.config.proofTimeoutMs,
       maxBuffer: 8 * 1024 * 1024
     });
-    return parseProofOutput(stdout);
+    const proofInput = parseProofOutput(stdout);
+    const analysis = this.recordProofInputTelemetry(proofInput.input_json);
+    this.enforceProofInputPolicy(analysis);
+    return proofInput;
+  }
+
+  recordProofInputTelemetry(inputJson) {
+    const analysis = analyzeProofInputContract(inputJson);
+    this.proofInputTelemetry.totalProofInputs += 1;
+    if (analysis.legacyLeafPosDetected) {
+      this.proofInputTelemetry.legacyLeafPosInputs += 1;
+      this.proofInputTelemetry.lastLegacyLeafPosDetectedAt = new Date().toISOString();
+      if (!this.proofInputTelemetry.legacyLeafPosWarningEmitted) {
+        this.logger.warn(
+          `[zktransfer-server-app] observed legacy proof input with leaf_pos; standard builder outputs should use flattened 4-ary tree_proof only.`
+        );
+        this.proofInputTelemetry.legacyLeafPosWarningEmitted = true;
+      }
+    }
+    if (analysis.flattenedFourAryTreeProofDetected) {
+      this.proofInputTelemetry.flattenedFourAryInputs += 1;
+    }
+    this.proofInputTelemetry.lastInputContract = analysis.inputContract;
+    this.proofInputTelemetry.lastTreeProofLength = analysis.treeProofLength;
+    this.proofInputTelemetry.lastInputAnalyzedAt = new Date().toISOString();
+    return analysis;
+  }
+
+  getProofInputTelemetry() {
+    return { ...this.proofInputTelemetry };
+  }
+
+  enforceProofInputPolicy(analysis) {
+    if (analysis.legacyLeafPosDetected && !this.config.allowLegacyProofInputs) {
+      throw new Error(
+        "legacy proof input contract with leaf_pos is disabled by ALLOW_LEGACY_PROOF_INPUTS=0"
+      );
+    }
   }
 
   async broadcastTransaction(executionPlan, proofResult) {
@@ -193,4 +241,49 @@ function parseProofOutput(stdout) {
     throw new Error("proof output did not contain JSON");
   }
   return JSON.parse(stdout.slice(jsonStart));
+}
+
+function createProofInputTelemetry() {
+  return {
+    totalProofInputs: 0,
+    legacyLeafPosInputs: 0,
+    flattenedFourAryInputs: 0,
+    lastInputContract: "none",
+    lastTreeProofLength: 0,
+    lastInputAnalyzedAt: null,
+    lastLegacyLeafPosDetectedAt: null,
+    legacyLeafPosWarningEmitted: false
+  };
+}
+
+function analyzeProofInputContract(inputJson) {
+  try {
+    const parsed = JSON.parse(inputJson);
+    const witnesses = parsed?.witnesses ?? {};
+    const treeProof = Array.isArray(witnesses.tree_proof) ? witnesses.tree_proof : [];
+    const legacyLeafPosDetected = Object.prototype.hasOwnProperty.call(witnesses, "leaf_pos");
+    const flattenedFourAryTreeProofDetected =
+      treeProof.length >= 4 && (treeProof.length - 4) % 4 === 0;
+
+    let inputContract = "unknown";
+    if (legacyLeafPosDetected) {
+      inputContract = "legacy-leaf-pos";
+    } else if (flattenedFourAryTreeProofDetected) {
+      inputContract = "flattened-4-ary";
+    }
+
+    return {
+      inputContract,
+      legacyLeafPosDetected,
+      flattenedFourAryTreeProofDetected,
+      treeProofLength: treeProof.length
+    };
+  } catch {
+    return {
+      inputContract: "unparseable",
+      legacyLeafPosDetected: false,
+      flattenedFourAryTreeProofDetected: false,
+      treeProofLength: 0
+    };
+  }
 }

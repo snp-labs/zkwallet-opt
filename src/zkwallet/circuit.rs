@@ -3,7 +3,10 @@ use crate::gadget::hashes;
 use crate::gadget::hashes::constraints::CRHSchemeGadget;
 use crate::gadget::hashes::poseidon;
 use crate::gadget::hashes::poseidon::constraints::CRHGadget;
+use crate::gadget::hashes::poseidon2;
+use crate::gadget::hashes::poseidon2_width4;
 use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
+use core::cmp::Ordering;
 use std::ops::Not;
 
 use crate::gadget::symmetric_encrytions::constraints::SymmetricEncryptionGadget;
@@ -33,6 +36,15 @@ use ark_std::{One, UniformRand};
 use super::MockingCircuit;
 
 pub type ConstraintF<C> = <<C as CurveGroup>::BaseField as Field>::BasePrimeField;
+
+const AMOUNT_BITS: usize = 128;
+const BALANCE_BITS: usize = AMOUNT_BITS + 2;
+
+fn enforce_bit_range<F: PrimeField>(value: &FpVar<F>, bits: usize) -> Result<(), SynthesisError> {
+    let _ = value.to_bits_le_with_top_bits_zero(bits)?;
+    Ok(())
+}
+
 #[allow(non_snake_case)]
 #[derive(Clone)]
 pub struct ZkWalletCircuit<C: CurveGroup, GG: CurveVar<C, ConstraintF<C>>>
@@ -44,6 +56,8 @@ where
     pub poseidon_pp_2: PoseidonConfig<C::BaseField>, // 2-to-1
     pub poseidon_pp_4: PoseidonConfig<C::BaseField>, // 4-to-1
     pub poseidon_pp_8: PoseidonConfig<C::BaseField>, // 8-to-1
+    pub membership_poseidon2_pp_3: poseidon2::Parameters<C::BaseField>, // leaf hash
+    pub membership_poseidon2_pp_4: poseidon2_width4::Parameters4<C::BaseField>, // 4-ary inner hash
     pub G: elgamal::Parameters<C>,
 
     // statement
@@ -81,28 +95,28 @@ where
     pub k: Option<elgamal::Plaintext<C>>,
     pub k_point_x: Option<symmetric::SymmetricKey<C::BaseField>>,
     pub leaf_pos: Option<u32>,
-    pub tree_proof: Option<merkle_tree_n_ary::Path<8, FieldMTConfig<C::BaseField>>>,
+    pub tree_proof: Option<merkle_tree_n_ary::Path<4, MembershipMTConfig<C::BaseField>>>,
     // directionSelector
     // intermediateHashWires
     pub _curve_var: PhantomData<GG>,
 }
 
-pub struct FieldMTConfig<F: PrimeField> {
+pub struct MembershipMTConfig<F: PrimeField> {
     _field: PhantomData<F>,
 }
-impl<F: PrimeField + Absorb> Config<8> for FieldMTConfig<F> {
+impl<F: PrimeField + Absorb> Config<4> for MembershipMTConfig<F> {
     type Leaf = [F];
     type LeafDigest = F;
     type LeafInnerDigestConverter = IdentityDigestConverter<F>;
     type InnerDigest = F;
-    type LeafHash = poseidon::PoseidonHash<F>;
-    type NToOneHash = poseidon::NToOneCRH<8, F>;
+    type LeafHash = poseidon2::Poseidon2<F>;
+    type NToOneHash = poseidon2_width4::Poseidon2Width4<F>;
 }
 
-struct FieldMTConfigVar<F: PrimeField> {
+struct MembershipMTConfigVar<F: PrimeField> {
     _field: PhantomData<F>,
 }
-impl<F> ConfigGadget<8, FieldMTConfig<F>, F> for FieldMTConfigVar<F>
+impl<F> ConfigGadget<4, MembershipMTConfig<F>, F> for MembershipMTConfigVar<F>
 where
     F: PrimeField + Absorb,
 {
@@ -110,8 +124,8 @@ where
     type LeafDigest = FpVar<F>;
     type LeafInnerConverter = IdentityDigestConverter<FpVar<F>>;
     type InnerDigest = FpVar<F>;
-    type LeafHash = poseidon::constraints::CRHGadget<F>;
-    type NToOneHash = poseidon::constraints::NToOneCRHGadget<8, F>;
+    type LeafHash = poseidon2::constraints::Poseidon2Gadget<F>;
+    type NToOneHash = poseidon2_width4::constraints::Poseidon2Width4Gadget<F>;
 }
 
 #[allow(non_snake_case)]
@@ -126,6 +140,21 @@ where
         self,
         cs: ark_relations::r1cs::ConstraintSystemRef<C::BaseField>,
     ) -> Result<(), SynthesisError> {
+        let profiling_enabled = std::env::var_os("ZKWALLET_CONSTRAINT_PROFILE").is_some();
+        let mut checkpoint_constraints = cs.num_constraints();
+        let profile_checkpoint = |label: &str, checkpoint_constraints: &mut usize| {
+            if profiling_enabled {
+                let current = cs.num_constraints();
+                println!(
+                    "[constraint-profile] {:<28} total={} delta={}",
+                    label,
+                    current,
+                    current - *checkpoint_constraints
+                );
+                *checkpoint_constraints = current;
+            }
+        };
+
         // constants
         let poseidon_pp_1 = hashes::poseidon::constraints::CRHParametersVar::new_constant(
             ark_relations::ns!(cs, "poseidon param 1-to-1"),
@@ -143,6 +172,16 @@ where
             ark_relations::ns!(cs, "poseidon param 8-to-1"),
             &self.poseidon_pp_8,
         )?;
+        let membership_poseidon2_pp_3 =
+            hashes::poseidon2::constraints::ParametersVar::new_constant(
+                ark_relations::ns!(cs, "membership poseidon2 param 3"),
+                &self.membership_poseidon2_pp_3,
+            )?;
+        let membership_poseidon2_pp_4 =
+            hashes::poseidon2_width4::constraints::Parameters4Var::new_constant(
+                ark_relations::ns!(cs, "membership poseidon2 param 4"),
+                &self.membership_poseidon2_pp_4,
+            )?;
         let G = elgamal::constraints::ParametersVar::new_constant(
             ark_relations::ns!(cs, "generator"),
             self.G,
@@ -299,20 +338,22 @@ where
             || self.k_point_x.ok_or(SynthesisError::AssignmentMissing),
         )?;
         let cw = merkle_tree_n_ary::constraints::PathVar::<
-            8,
-            FieldMTConfig<C::BaseField>,
+            4,
+            MembershipMTConfig<C::BaseField>,
             C::BaseField,
-            FieldMTConfigVar<C::BaseField>,
+            MembershipMTConfigVar<C::BaseField>,
         >::new_witness(ark_relations::ns!(cs, "cw"), || {
             self.tree_proof.ok_or(SynthesisError::AssignmentMissing)
         })?;
         /////////////////////////////////////////////////////////////////
+        profile_checkpoint("allocations", &mut checkpoint_constraints);
 
         /////////////////////////////////////////////////////////////////
         // check k == g(k_point_x, _k_point_y)
         let check_g_k_point_x = k.plaintext.to_constraint_field()?[0].clone();
         check_g_k_point_x.enforce_equal(&k_point_x.k)?;
         /////////////////////////////////////////////////////////////////
+        profile_checkpoint("plaintext consistency", &mut checkpoint_constraints);
 
         // (k_send_ena, sk_send_own, sk_send_enc) <- usk_send
         // (addr_send, pk_send_own, pk_send_enc) <- upk_send
@@ -354,6 +395,7 @@ where
         let result_sn = CRHGadget::<C::BaseField>::evaluate(&poseidon_pp_2, &hash_input).unwrap();
         sn.enforce_equal(&result_sn)?;
         /////////////////////////////////////////////////////////////////
+        profile_checkpoint("sender hash chain", &mut checkpoint_constraints);
 
         /////////////////////////////////////////////////////////////////
         // if v_priv_in > 0 then
@@ -363,7 +405,12 @@ where
         // Allocate Leaf
         let leaf_g: Vec<_> = vec![cm];
 
-        let path_check = cw.verify_membership(&poseidon_pp_1, &poseidon_pp_8, &rt, &leaf_g)?;
+        let path_check = cw.verify_membership(
+            &membership_poseidon2_pp_3,
+            &membership_poseidon2_pp_4,
+            &rt,
+            &leaf_g,
+        )?;
 
         // if dv == 0 then do not check merkle tree
         let check_dv = dv.is_zero()?;
@@ -371,6 +418,7 @@ where
         (path_check | check_dv).enforce_equal(&Boolean::constant(true))?;
 
         /////////////////////////////////////////////////////////////////
+        profile_checkpoint("merkle membership", &mut checkpoint_constraints);
 
         /////////////////////////////////////////////////////////////////
         // (pct_new, aux_new) <- public_encryption.enc(pk_recv_enc, apk, (o_new, token_addr_w, token_id_w, v_priv_out, addr_recv))
@@ -381,6 +429,7 @@ where
         K_u.enforce_equal(&result_K_u)?;
         K_a.enforce_equal(&result_K_a)?;
         /////////////////////////////////////////////////////////////////
+        profile_checkpoint("elgamal encryption", &mut checkpoint_constraints);
 
         /////////////////////////////////////////////////////////////////
         // check CT
@@ -411,6 +460,7 @@ where
             c.enforce_equal(&CT[i])?;
         }
         /////////////////////////////////////////////////////////////////
+        profile_checkpoint("ct encryption checks", &mut checkpoint_constraints);
 
         /////////////////////////////////////////////////////////////////
         // addr_recv <- H(pk_recv_own || pk_recv_enc)
@@ -434,6 +484,7 @@ where
         let result_cm_ = CRHGadget::<C::BaseField>::evaluate(&poseidon_pp_8, &hash_input).unwrap();
         cm_.enforce_equal(&result_cm_)?;
         /////////////////////////////////////////////////////////////////
+        profile_checkpoint("receiver hash chain", &mut checkpoint_constraints);
 
         /////////////////////////////////////////////////////////////////
         // check ena
@@ -497,11 +548,17 @@ where
         tk_id.conditional_enforce_equal(&result_tk_id_ena_old.m, &is_cin_bool)?;
         tk_id.enforce_equal(&result_tk_id_ena_new.m)?;
 
-        let v_eval = (result_v_in_ena_old.clone().m * is_cin.clone()) + dv.clone() - dv_.clone()
-            + pv.clone()
-            - pv_.clone();
+        let v_ena_old_effective = result_v_in_ena_old.clone().m * is_cin.clone();
+        let available_before = v_ena_old_effective.clone() + dv.clone() + pv.clone();
+        let total_spend = dv_.clone() + pv_.clone();
+
+        // Prevent field wraparound from turning a negative balance into a huge valid field element.
+        total_spend.enforce_cmp(&available_before, Ordering::Less, true)?;
+
+        let v_eval = available_before.clone() - total_spend.clone();
         v_eval.enforce_equal(&result_v_out_ena_new.m)?;
         /////////////////////////////////////////////////////////////////
+        profile_checkpoint("symmetric decrypt checks", &mut checkpoint_constraints);
 
         /////////////////////////////////////////////////////////////////
         // if v_pub_in > 0 or v_pub_out > 0 then
@@ -514,17 +571,21 @@ where
         (check_tk_id & check_tk_addr)
             .conditional_enforce_equal(&Boolean::TRUE, &is_pv_zero.not())?;
         /////////////////////////////////////////////////////////////////
+        profile_checkpoint("public token checks", &mut checkpoint_constraints);
 
         /////////////////////////////////////////////////////////////////
-        // pv pv_ dv dv_ range check
-        let MODULUS_BIT_SIZE_MINUS_ONE = (C::BaseField::MODULUS_BIT_SIZE - 1) as usize;
-        let _ = (result_v_in_ena_old.m * is_cin)
-            .to_bits_le_with_top_bits_zero(MODULUS_BIT_SIZE_MINUS_ONE)?;
-        let _ = pv.to_bits_le_with_top_bits_zero(MODULUS_BIT_SIZE_MINUS_ONE)?;
-        let _ = pv_.to_bits_le_with_top_bits_zero(MODULUS_BIT_SIZE_MINUS_ONE)?;
-        let _ = dv.to_bits_le_with_top_bits_zero(MODULUS_BIT_SIZE_MINUS_ONE)?;
-        let _ = dv_.to_bits_le_with_top_bits_zero(MODULUS_BIT_SIZE_MINUS_ONE)?;
+        // Keep all monetary values in a bounded integer range so comparisons and additions
+        // are interpreted as normal arithmetic rather than modulo-field wraparound.
+        enforce_bit_range(&v_ena_old_effective, BALANCE_BITS)?;
+        enforce_bit_range(&pv, AMOUNT_BITS)?;
+        enforce_bit_range(&pv_, AMOUNT_BITS)?;
+        enforce_bit_range(&dv, AMOUNT_BITS)?;
+        enforce_bit_range(&dv_, AMOUNT_BITS)?;
+        enforce_bit_range(&available_before, BALANCE_BITS)?;
+        enforce_bit_range(&total_spend, BALANCE_BITS)?;
+        enforce_bit_range(&result_v_out_ena_new.m, BALANCE_BITS)?;
         /////////////////////////////////////////////////////////////////
+        profile_checkpoint("range checks", &mut checkpoint_constraints);
 
         Ok(())
     }
@@ -535,6 +596,8 @@ pub struct PoseidonConfigSet<F: PrimeField> {
     pub poseidon_pp_2: PoseidonConfig<F>,
     pub poseidon_pp_4: PoseidonConfig<F>,
     pub poseidon_pp_8: PoseidonConfig<F>,
+    pub membership_poseidon2_pp_3: poseidon2::Parameters<F>,
+    pub membership_poseidon2_pp_4: poseidon2_width4::Parameters4<F>,
 }
 
 impl<F: PrimeField> Clone for PoseidonConfigSet<F> {
@@ -544,6 +607,8 @@ impl<F: PrimeField> Clone for PoseidonConfigSet<F> {
             poseidon_pp_2: self.poseidon_pp_2.clone(),
             poseidon_pp_4: self.poseidon_pp_4.clone(),
             poseidon_pp_8: self.poseidon_pp_8.clone(),
+            membership_poseidon2_pp_3: self.membership_poseidon2_pp_3.clone(),
+            membership_poseidon2_pp_4: self.membership_poseidon2_pp_4.clone(),
         }
     }
 }
@@ -576,6 +641,8 @@ where
         let poseidon_pp_2 = hash_param.poseidon_pp_2;
         let poseidon_pp_4 = hash_param.poseidon_pp_4;
         let poseidon_pp_8 = hash_param.poseidon_pp_8;
+        let membership_poseidon2_pp_3 = hash_param.membership_poseidon2_pp_3;
+        let membership_poseidon2_pp_4 = hash_param.membership_poseidon2_pp_4;
         let elgamal_param: elgamal::Parameters<C> = elgamal::Parameters { generator };
 
         let (apk, _) = ElGamal::keygen(&elgamal_param, rng).unwrap();
@@ -710,10 +777,11 @@ where
         });
 
         println!("generate mocking tree");
-        let leaf_crh_params = poseidon_pp_1.clone();
-        let n_to_one_params = poseidon_pp_8.clone();
+        let leaf_crh_params = membership_poseidon2_pp_3.clone();
+        let n_to_one_params = membership_poseidon2_pp_4.clone();
 
-        let mock_path = get_mocking_merkle_tree::<8, FieldMTConfig<Self::F>, Self::F>(tree_height);
+        let mock_path =
+            get_mocking_merkle_tree::<4, MembershipMTConfig<Self::F>, Self::F>(tree_height);
         let (proof, rt) =
             mock_path.get_test_path(&leaf_crh_params, &n_to_one_params, [cm].as_ref())?;
 
@@ -723,6 +791,8 @@ where
             poseidon_pp_2,
             poseidon_pp_4,
             poseidon_pp_8,
+            membership_poseidon2_pp_3,
+            membership_poseidon2_pp_4,
             G: elgamal_param,
 
             // inputs

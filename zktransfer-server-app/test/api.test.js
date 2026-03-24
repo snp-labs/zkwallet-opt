@@ -18,6 +18,16 @@ function createMockServices() {
     appName: "test-app",
     custodyMode: "test",
     executionMode: "test",
+    jwtSecretConfigured: true,
+    usingDefaultJwtSecret: false,
+    usingPlaceholderJwtSecret: false,
+    allowLegacyProofInputs: false,
+    proofInputPolicyPinned: true,
+    zkpasskeyRelayerConfigured: false,
+    zkpasskeyRecoveryFundingConfigured: false,
+    zkpasskeyPkExists: true,
+    proofBinaryExists: true,
+    proofInputBuilderExists: true,
     jwtSecret: "test-secret",
     supportedNetworks: ["ethereum"],
     supportedTokenTypes: ["ERC20"],
@@ -37,6 +47,8 @@ function createMockServices() {
     getRequest: async () => null,
     listTransactions: async () => [],
     getTransaction: async () => null,
+    upsertSocialRecoveryAccount: async () => {},
+    listSocialRecoveryAccounts: async () => [],
   };
 
   const authService = {
@@ -57,6 +69,16 @@ function createMockServices() {
 
   const orchestrator = {
     enqueue: async () => {},
+    getProofInputTelemetry: () => ({
+      totalProofInputs: 0,
+      legacyLeafPosInputs: 0,
+      flattenedFourAryInputs: 0,
+      lastInputContract: "none",
+      lastTreeProofLength: 0,
+      lastInputAnalyzedAt: null,
+      lastLegacyLeafPosDetectedAt: null,
+      legacyLeafPosWarningEmitted: false,
+    }),
   };
 
   const zkpasskeyService = new ZkPasskeyService({ config, store });
@@ -146,7 +168,119 @@ test("GET /health returns 200 with ok:true", async () => {
 
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.ok, true);
+  assert.equal(res.body.ready, true);
   assert.equal(res.body.app, "test-app");
+  assert.equal(res.body.jwtSecretConfigured, true);
+  assert.equal(res.body.usingDefaultJwtSecret, false);
+  assert.equal(res.body.usingPlaceholderJwtSecret, false);
+  assert.equal(res.body.allowLegacyProofInputs, false);
+  assert.equal(res.body.proofInputPolicyPinned, true);
+  assert.equal(res.body.zkpasskeyNapiAvailable, true);
+  assert.equal(res.body.zkpasskeyRecoveryFundingConfigured, false);
+  assert.equal(res.body.zkpasskeyPkExists, true);
+  assert.equal(res.body.socialRecoveryReady, false);
+  assert.deepEqual(res.body.proofInputTelemetry, {
+    totalProofInputs: 0,
+    legacyLeafPosInputs: 0,
+    flattenedFourAryInputs: 0,
+    lastInputContract: "none",
+    lastTreeProofLength: 0,
+    lastInputAnalyzedAt: null,
+    lastLegacyLeafPosDetectedAt: null,
+    legacyLeafPosWarningEmitted: false
+  });
+  assert.deepEqual(res.body.checks, {
+    proofBinaryExists: true,
+    proofInputBuilderExists: true,
+    jwtSecretConfigured: true,
+    proofInputPolicyPinned: true
+  });
+  assert.deepEqual(res.body.socialRecoveryChecks, {
+    zkpasskeyNapiAvailable: true,
+    zkpasskeyRelayerConfigured: false,
+    zkpasskeyPkExists: true,
+    zkpasskeyRecoveryFundingConfigured: false
+  });
+  assert.deepEqual(res.body.socialRecoveryThreshold, {
+    n: 6,
+    k: 3,
+    supportedProviderCount: 3
+  });
+});
+
+test("GET /health reports not ready when JWT secret is still a placeholder", async () => {
+  const services = createMockServices();
+  services.config.jwtSecretConfigured = false;
+  services.config.usingDefaultJwtSecret = false;
+  services.config.usingPlaceholderJwtSecret = true;
+
+  const app = createApp(services);
+  const req = mockReq("GET", "/health");
+  const res = mockRes();
+
+  await app(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.ok, true);
+  assert.equal(res.body.ready, false);
+  assert.equal(res.body.jwtSecretConfigured, false);
+  assert.equal(res.body.usingDefaultJwtSecret, false);
+  assert.equal(res.body.usingPlaceholderJwtSecret, true);
+  assert.deepEqual(res.body.checks, {
+    proofBinaryExists: true,
+    proofInputBuilderExists: true,
+    jwtSecretConfigured: false,
+    proofInputPolicyPinned: true
+  });
+  assert.equal(res.body.socialRecoveryReady, false);
+});
+
+test("GET /health reports social recovery not ready when recovery funding is zero", async () => {
+  const services = createMockServices();
+  services.config.zkpasskeyRelayerConfigured = true;
+  services.config.zkpasskeyPkExists = true;
+  services.config.zkpasskeyRecoveryFundingConfigured = false;
+
+  const app = createApp(services);
+  const req = mockReq("GET", "/health");
+  const res = mockRes();
+
+  await app(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.ok, true);
+  assert.equal(res.body.socialRecoveryReady, false);
+  assert.equal(res.body.zkpasskeyRecoveryFundingConfigured, false);
+  assert.deepEqual(res.body.socialRecoveryChecks, {
+    zkpasskeyNapiAvailable: true,
+    zkpasskeyRelayerConfigured: true,
+    zkpasskeyPkExists: true,
+    zkpasskeyRecoveryFundingConfigured: false
+  });
+});
+
+test("GET /health reports not ready when legacy proof-input policy is not pinned", async () => {
+  const services = createMockServices();
+  services.config.allowLegacyProofInputs = true;
+  services.config.proofInputPolicyPinned = false;
+
+  const app = createApp(services);
+  const req = mockReq("GET", "/health");
+  const res = mockRes();
+
+  await app(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.ok, true);
+  assert.equal(res.body.ready, false);
+  assert.equal(res.body.allowLegacyProofInputs, true);
+  assert.equal(res.body.proofInputPolicyPinned, false);
+  assert.deepEqual(res.body.checks, {
+    proofBinaryExists: true,
+    proofInputBuilderExists: true,
+    jwtSecretConfigured: true,
+    proofInputPolicyPinned: false
+  });
 });
 
 test("OPTIONS returns 204 with CORS headers", async () => {
@@ -232,7 +366,7 @@ test("GET /v1/merkle/path/-1 returns 400 for invalid index", async () => {
   assert.equal(res.statusCode, 400);
 });
 
-test("POST /v1/social-login/create-account requires auth", async () => {
+test("POST /v1/social-login/create-account does not require app auth", async () => {
   const app = createApp(createMockServices());
   const req = mockReq("POST", "/v1/social-login/create-account", {}, {
     jwts: ["a"],
@@ -243,7 +377,7 @@ test("POST /v1/social-login/create-account requires auth", async () => {
 
   await app(req, res);
 
-  assert.equal(res.statusCode, 401);
+  assert.notEqual(res.statusCode, 401);
 });
 
 test("POST /v1/social-login/create-account validates required fields", async () => {
@@ -260,6 +394,92 @@ test("POST /v1/social-login/create-account validates required fields", async () 
 
   assert.equal(res.statusCode, 400);
   assert.ok(res.body.error.message.includes("required"));
+});
+
+test("POST /v1/social-login/recovery-context validates required fields", async () => {
+  const app = createApp(createMockServices());
+  const req = mockReq("POST", "/v1/social-login/recovery-context", {}, {
+    jwts: ["a"],
+  });
+  const res = mockRes();
+
+  await app(req, res);
+
+  assert.equal(res.statusCode, 400);
+  assert.ok(res.body.error.message.includes("required"));
+});
+
+test("POST /v1/social-login/recovery-challenge validates required fields", async () => {
+  const app = createApp(createMockServices());
+  const req = mockReq("POST", "/v1/social-login/recovery-challenge", {}, {
+    jwts: ["a"],
+    providers: ["google"],
+  });
+  const res = mockRes();
+
+  await app(req, res);
+
+  assert.equal(res.statusCode, 400);
+  assert.ok(res.body.error.message.includes("required"));
+});
+
+test("POST /v1/social-login/recovery-challenge returns service result", async () => {
+  const services = createMockServices();
+  services.zkpasskeyService.prepareRecoveryChallenge = async () => ({
+    challenge: {
+      nonce: "0x1234",
+      zkAccountAddress: "0xabc",
+    },
+  });
+  const app = createApp(services);
+  const req = mockReq("POST", "/v1/social-login/recovery-challenge", {}, {
+    jwts: ["a", "b"],
+    providers: ["google", "apple"],
+    newTxKeyAddress: "0x1111111111111111111111111111111111111111",
+  });
+  const res = mockRes();
+
+  await app(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.challenge.nonce, "0x1234");
+});
+
+test("POST /v1/social-login/recovery-submit validates required fields", async () => {
+  const app = createApp(createMockServices());
+  const req = mockReq("POST", "/v1/social-login/recovery-submit", {}, {
+    jwts: ["a"],
+    providers: ["google"],
+    newTxKeyAddress: "0x1111111111111111111111111111111111111111",
+  });
+  const res = mockRes();
+
+  await app(req, res);
+
+  assert.equal(res.statusCode, 400);
+  assert.ok(res.body.error.message.includes("required"));
+});
+
+test("POST /v1/social-login/recovery-submit returns service result", async () => {
+  const services = createMockServices();
+  services.zkpasskeyService.submitRecovery = async () => ({
+    submission: {
+      txHash: "0xtxhash",
+    },
+  });
+  const app = createApp(services);
+  const req = mockReq("POST", "/v1/social-login/recovery-submit", {}, {
+    jwts: ["a", "b"],
+    providers: ["google", "apple"],
+    newTxKeyAddress: "0x1111111111111111111111111111111111111111",
+    random: "0x1234",
+  });
+  const res = mockRes();
+
+  await app(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.submission.txHash, "0xtxhash");
 });
 
 test("unknown route returns 404", async () => {

@@ -208,24 +208,44 @@ where
         randomness: &Self::RandomnessVar,
         public_key: &Self::PublicKeyVar,
     ) -> Result<Self::OutputVar, SynthesisError> {
+        let profiling_enabled = std::env::var_os("ZKWALLET_CONSTRAINT_PROFILE").is_some();
+        let cs = public_key.pk.cs();
+        let mut checkpoint_constraints = cs.num_constraints();
+        let profile_checkpoint = |label: &str, checkpoint_constraints: &mut usize| {
+            if profiling_enabled {
+                let current = cs.num_constraints();
+                println!(
+                    "[constraint-profile] {:<28} total={} delta={}",
+                    label,
+                    current,
+                    current - *checkpoint_constraints
+                );
+                *checkpoint_constraints = current;
+            }
+        };
+
         // flatten randomness to little-endian bit vector
         let randomness = randomness
             .0
             .iter()
             .flat_map(|b| b.to_bits_le().unwrap())
             .collect::<Vec<_>>();
+        profile_checkpoint("elgamal bits", &mut checkpoint_constraints);
 
         // compute s = randomness*pk
         let s = public_key.pk.clone().scalar_mul_le(randomness.iter())?;
+        profile_checkpoint("elgamal scalar_mul pk", &mut checkpoint_constraints);
 
         // compute c1 = randomness*generator
         let c1 = parameters
             .generator
             .clone()
             .scalar_mul_le(randomness.iter())?;
+        profile_checkpoint("elgamal scalar_mul gen", &mut checkpoint_constraints);
 
         // compute c2 = m + s
         let c2 = message.plaintext.clone() + s;
+        profile_checkpoint("elgamal add", &mut checkpoint_constraints);
 
         Ok(Self::OutputVar {
             c1,

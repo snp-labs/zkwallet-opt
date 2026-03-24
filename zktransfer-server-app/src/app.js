@@ -10,6 +10,7 @@ import {
 import { randomId } from "./lib/ids.js";
 import { validateZkTransferRequest } from "./services/requestValidator.js";
 import { getSupportedProviders } from "./lib/oidc.js";
+import { buildSocialRecoveryStatus } from "./lib/socialRecoveryStatus.js";
 import QRCode from "qrcode";
 
 function getAuthToken(req) {
@@ -53,11 +54,55 @@ export function createApp(services) {
     }
 
     if (req.method === "GET" && url.pathname === "/health") {
+      const zkParams = services.zkpasskeyService?.getZkParameters?.() || { n: 0, k: 0 };
+      const zkpasskeyStatus = services.zkpasskeyService?.getStatus?.() || {
+        napiAvailable: false,
+        relayer: {
+          relayerConfigured: services.config.zkpasskeyRelayerConfigured,
+        },
+      };
+      const checks = {
+        proofBinaryExists: services.config.proofBinaryExists,
+        proofInputBuilderExists: services.config.proofInputBuilderExists,
+        jwtSecretConfigured: services.config.jwtSecretConfigured,
+        proofInputPolicyPinned: services.config.proofInputPolicyPinned
+      };
+      const socialRecoveryStatus = buildSocialRecoveryStatus({
+        config: services.config,
+        zkpasskeyStatus,
+        zkParams,
+      });
+      const proofInputTelemetry = services.orchestrator?.getProofInputTelemetry?.() || {
+        totalProofInputs: 0,
+        legacyLeafPosInputs: 0,
+        flattenedFourAryInputs: 0,
+        lastInputContract: "none",
+        lastTreeProofLength: 0,
+        lastInputAnalyzedAt: null,
+        lastLegacyLeafPosDetectedAt: null,
+        legacyLeafPosWarningEmitted: false
+      };
       writeJson(res, 200, {
         ok: true,
+        ready: Object.values(checks).every(Boolean),
         app: services.config.appName,
         custodyMode: services.config.custodyMode,
-        executionMode: services.config.executionMode
+        executionMode: services.config.executionMode,
+        jwtSecretConfigured: services.config.jwtSecretConfigured,
+        usingDefaultJwtSecret: services.config.usingDefaultJwtSecret,
+        usingPlaceholderJwtSecret: services.config.usingPlaceholderJwtSecret,
+        allowLegacyProofInputs: services.config.allowLegacyProofInputs,
+        proofInputPolicyPinned: services.config.proofInputPolicyPinned,
+        zkpasskeyRelayerConfigured: services.config.zkpasskeyRelayerConfigured,
+        zkpasskeyRecoveryFundingConfigured:
+          services.config.zkpasskeyRecoveryFundingConfigured,
+        zkpasskeyNapiAvailable: Boolean(zkpasskeyStatus.napiAvailable),
+        zkpasskeyPkExists: services.config.zkpasskeyPkExists,
+        socialRecoveryReady: socialRecoveryStatus.socialRecoveryReady,
+        socialRecoveryChecks: socialRecoveryStatus.socialRecoveryChecks,
+        socialRecoveryThreshold: socialRecoveryStatus.socialRecoveryThreshold,
+        proofInputTelemetry,
+        checks
       });
       return;
     }
@@ -303,10 +348,6 @@ export function createApp(services) {
         writeMethodNotAllowed(res);
         return;
       }
-      const user = await requireUser(req, res, services);
-      if (!user) {
-        return;
-      }
       try {
         const body = await readJson(req);
         if (!body.jwts || !body.providers || !body.txKeyAddress) {
@@ -326,6 +367,90 @@ export function createApp(services) {
         writeJson(res, 201, result);
       } catch (error) {
         writeError(res, 400, "account_creation_failed", error.message);
+      }
+      return;
+    }
+
+    if (url.pathname === "/v1/social-login/recovery-context") {
+      if (req.method !== "POST") {
+        writeMethodNotAllowed(res);
+        return;
+      }
+      try {
+        const body = await readJson(req);
+        if (!body.jwts || !body.providers) {
+          writeError(
+            res,
+            400,
+            "invalid_request",
+            "jwts and providers are required"
+          );
+          return;
+        }
+        const context = await services.zkpasskeyService.buildRecoveryContext({
+          jwts: body.jwts,
+          providers: body.providers,
+        });
+        writeJson(res, 200, context);
+      } catch (error) {
+        writeError(res, 400, "recovery_context_failed", error.message);
+      }
+      return;
+    }
+
+    if (url.pathname === "/v1/social-login/recovery-challenge") {
+      if (req.method !== "POST") {
+        writeMethodNotAllowed(res);
+        return;
+      }
+      try {
+        const body = await readJson(req);
+        if (!body.jwts || !body.providers || !body.newTxKeyAddress) {
+          writeError(
+            res,
+            400,
+            "invalid_request",
+            "jwts, providers, and newTxKeyAddress are required"
+          );
+          return;
+        }
+        const result = await services.zkpasskeyService.prepareRecoveryChallenge({
+          jwts: body.jwts,
+          providers: body.providers,
+          newTxKeyAddress: body.newTxKeyAddress,
+        });
+        writeJson(res, 200, result);
+      } catch (error) {
+        writeError(res, 400, "recovery_challenge_failed", error.message);
+      }
+      return;
+    }
+
+    if (url.pathname === "/v1/social-login/recovery-submit") {
+      if (req.method !== "POST") {
+        writeMethodNotAllowed(res);
+        return;
+      }
+      try {
+        const body = await readJson(req);
+        if (!body.jwts || !body.providers || !body.newTxKeyAddress || !body.random) {
+          writeError(
+            res,
+            400,
+            "invalid_request",
+            "jwts, providers, newTxKeyAddress, and random are required"
+          );
+          return;
+        }
+        const result = await services.zkpasskeyService.submitRecovery({
+          jwts: body.jwts,
+          providers: body.providers,
+          newTxKeyAddress: body.newTxKeyAddress,
+          random: body.random,
+        });
+        writeJson(res, 200, result);
+      } catch (error) {
+        writeError(res, 400, "recovery_submit_failed", error.message);
       }
       return;
     }

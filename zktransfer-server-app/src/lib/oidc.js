@@ -10,7 +10,7 @@ import crypto from "node:crypto";
 
 // ─── Provider Configuration ──────────────────────────────────
 
-const PROVIDER_CONFIG = {
+const BASE_PROVIDER_CONFIG = {
   google: {
     jwksUri: "https://www.googleapis.com/oauth2/v3/certs",
     issuer: "https://accounts.google.com",
@@ -25,6 +25,22 @@ const PROVIDER_CONFIG = {
   },
 };
 
+function getProviderOverrideKey(provider, suffix) {
+  return `OIDC_${provider.toUpperCase()}_${suffix}_OVERRIDE`;
+}
+
+export function getProviderConfig(provider, env = process.env) {
+  const config = BASE_PROVIDER_CONFIG[provider];
+  if (!config) {
+    throw new Error(`Unknown OIDC provider: ${provider}`);
+  }
+  return {
+    ...config,
+    issuer: env[getProviderOverrideKey(provider, "ISSUER")] || config.issuer,
+    jwksUri: env[getProviderOverrideKey(provider, "JWKS_URI")] || config.jwksUri,
+  };
+}
+
 // ─── JWKS Cache ──────────────────────────────────────────────
 
 const jwksCache = new Map();
@@ -37,10 +53,7 @@ const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
  * @returns {Promise<Array>} Array of JWK key objects
  */
 async function fetchJwks(provider) {
-  const config = PROVIDER_CONFIG[provider];
-  if (!config) {
-    throw new Error(`Unknown OIDC provider: ${provider}`);
-  }
+  const config = getProviderConfig(provider);
 
   const cached = jwksCache.get(provider);
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
@@ -82,6 +95,14 @@ function base64urlDecode(str) {
   return Buffer.from(padded, "base64");
 }
 
+export function readJwtHeader(rawJwt) {
+  const parts = rawJwt.split(".");
+  if (parts.length !== 3) {
+    throw new Error("Invalid JWT format: expected 3 parts");
+  }
+  return JSON.parse(base64urlDecode(parts[0]).toString("utf8"));
+}
+
 // ─── JWT RS256 Verification ──────────────────────────────────
 
 /**
@@ -93,10 +114,7 @@ function base64urlDecode(str) {
  * @throws If signature is invalid, token is expired, or issuer mismatch
  */
 export async function verifyOidcJwt(rawJwt, provider) {
-  const config = PROVIDER_CONFIG[provider];
-  if (!config) {
-    throw new Error(`Unknown OIDC provider: ${provider}`);
-  }
+  const config = getProviderConfig(provider);
 
   const parts = rawJwt.split(".");
   if (parts.length !== 3) {
@@ -181,21 +199,32 @@ export function extractOidcSecret(verifiedPayload) {
 export async function getProviderRsaPublicKey(provider, kid) {
   const jwk = await findJwk(provider, kid);
   return {
-    n: base64urlDecode(jwk.n).toString("hex"),
-    e: base64urlDecode(jwk.e).toString("hex"),
+    n: jwk.n,
+    e: jwk.e,
     kid: jwk.kid,
   };
+}
+
+export async function getProviderRsaPublicKeyFromJwt(rawJwt, provider) {
+  const header = readJwtHeader(rawJwt);
+  if (!header.kid) {
+    throw new Error("JWT header missing kid (key ID)");
+  }
+  return getProviderRsaPublicKey(provider, header.kid);
 }
 
 /**
  * Get the list of supported OIDC providers with their configuration.
  */
 export function getSupportedProviders() {
-  return Object.entries(PROVIDER_CONFIG).map(([id, config]) => ({
-    id,
-    issuer: config.issuer,
-    jwksUri: config.jwksUri,
-  }));
+  return Object.keys(BASE_PROVIDER_CONFIG).map((id) => {
+    const config = getProviderConfig(id);
+    return {
+      id,
+      issuer: config.issuer,
+      jwksUri: config.jwksUri,
+    };
+  });
 }
 
 /**

@@ -11,6 +11,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   extractOidcSecret,
+  getProviderConfig,
   getSupportedProviders,
   clearJwksCache,
 } from "../src/lib/oidc.js";
@@ -69,6 +70,16 @@ test("getSupportedProviders has correct issuers", () => {
   assert.equal(byId.google.issuer, "https://accounts.google.com");
   assert.equal(byId.kakao.issuer, "https://kauth.kakao.com");
   assert.equal(byId.apple.issuer, "https://appleid.apple.com");
+});
+
+test("getProviderConfig respects env overrides", () => {
+  const config = getProviderConfig("google", {
+    OIDC_GOOGLE_ISSUER_OVERRIDE: "http://127.0.0.1:4400/google",
+    OIDC_GOOGLE_JWKS_URI_OVERRIDE: "http://127.0.0.1:4400/jwks",
+  });
+
+  assert.equal(config.issuer, "http://127.0.0.1:4400/google");
+  assert.equal(config.jwksUri, "http://127.0.0.1:4400/jwks");
 });
 
 test("clearJwksCache does not throw", () => {

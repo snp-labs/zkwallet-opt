@@ -1,0 +1,30 @@
+{
+  "name": "zktransfer-ops-root",
+  "private": true,
+  "scripts": {
+    "ops:overview": "bash scripts/zktransfer-ops-overview.sh",
+    "ops:summary": "bash scripts/zktransfer-ops-summary.sh",
+    "ops:summary:markdown": "bash scripts/zktransfer-ops-summary.sh --markdown",
+    "ops:check": "bash scripts/zktransfer-ops-summary.sh --check",
+    "ops:doctor": "bash scripts/zktransfer-ops-doctor.sh",
+    "ops:changes": "node scripts/zktransfer-ops-changes.mjs",
+    "ops:compare": "node scripts/zktransfer-ops-compare.mjs",
+    "ops:export": "node scripts/zktransfer-ops-export.mjs",
+    "ops:history": "node scripts/zktransfer-ops-history.mjs",
+    "ops:history:paths": "node scripts/zktransfer-ops-history.mjs --paths",
+    "ops:latest": "node scripts/zktransfer-ops-latest.mjs",
+    "ops:next": "node scripts/zktransfer-ops-next.mjs",
+    "ops:next:root": "node scripts/zktransfer-ops-next.mjs --root-command-only",
+    "ops:plan": "node scripts/zktransfer-ops-plan.mjs",
+    "ops:previous": "node scripts/zktransfer-ops-previous.mjs",
+    "ops:prune": "node scripts/zktransfer-ops-prune.mjs",
+    "ops:report": "node scripts/zktransfer-ops-report.mjs",
+    "ops:snapshot": "node scripts/zktransfer-ops-snapshot.mjs",
+    "ops:status": "bash scripts/zktransfer-ops-run.sh deployment:status",
+    "ops:setup-env": "bash scripts/zktransfer-ops-run.sh setup:env",
+    "ops:check-ready": "bash scripts/zktransfer-ops-run.sh check:ready",
+    "ops:install:dry-run": "bash scripts/zktransfer-ops-run.sh install:systemd:dry-run",
+    "ops:verify": "bash scripts/zktransfer-ops-run.sh verify:deployment",
+    "ops:test": "node --test scripts/zktransfer-ops-overview.test.mjs scripts/zktransfer-ops-summary.test.mjs scripts/zktransfer-ops-run.test.mjs scripts/zktransfer-ops-shell.test.mjs scripts/zktransfer-ops-doctor.test.mjs scripts/zktransfer-ops-next.test.mjs scripts/zktransfer-ops-plan.test.mjs scripts/zktransfer-ops-report.test.mjs scripts/zktransfer-ops-export.test.mjs scripts/zktransfer-ops-compare.test.mjs scripts/zktransfer-ops-history.test.mjs scripts/zktransfer-ops-prune.test.mjs scripts/zktransfer-ops-latest.test.mjs scripts/zktransfer-ops-previous.test.mjs scripts/zktransfer-ops-snapshot.test.mjs scripts/zktransfer-ops-changes.test.mjs"
+  }
+}

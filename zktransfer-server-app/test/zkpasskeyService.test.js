@@ -11,7 +11,15 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ZkPasskeyService } from "../src/services/zkpasskeyService.js";
+import {
+  ZkPasskeyService,
+  chainPoseidonHash,
+  createProviderLeaf,
+  normalizeSecretForAnchorGeneration,
+  normalizeJwtStringClaimValue,
+  stringToFieldLimbs,
+  rsaModulusToFieldLimbs,
+} from "../src/services/zkpasskeyService.js";
 
 function createService(overrides = {}) {
   return new ZkPasskeyService({
@@ -158,4 +166,69 @@ test("getMerklePath returns path and indices of correct length", () => {
   for (const i of proof.indices) {
     assert.equal(typeof i, "number");
   }
+});
+
+test("stringToFieldLimbs pads issuer into 31-byte BN254 chunks", () => {
+  const limbs = stringToFieldLimbs("https://accounts.google.com", 93);
+  assert.equal(limbs.length, 3);
+  assert.equal(typeof limbs[0], "string");
+  assert.equal(typeof limbs[1], "string");
+  assert.equal(typeof limbs[2], "string");
+});
+
+test("rsaModulusToFieldLimbs returns 32 little-endian 64-bit limbs", () => {
+  const limbs = rsaModulusToFieldLimbs(
+    "vLzd_VDnr8zt9pHfSkO3G0pUlaGJbYkIXXhma9-R9oETx2u0eZ-bSblq71FlA-PWLdjOW1SYtOngVZT5ZxJQ8FRFQolE8YzgByHifgo16ogEmeKdCIlCLd48IETTMOo093BLa2BzDygm8xBcpV_yqlxTUHdw2RH4vf5uulzbHcbdTf94I_DMlNUQX_yTmB8mu3GmDT-1xpL90iVEybjNWEcIrhWGHYqEFkKeBU1hvPf038Lts07eKiBKZWjo7-ZESCPNmdPvVkx29GuIBlwXp3824TB0DR0nhhFncXDuVzxDAUFSrnM0JwPa4ZX4M_xHdtUuk4Bp46wj_kb44jO4yw"
+  );
+  assert.equal(limbs.length, 32);
+  assert.equal(typeof limbs[0], "string");
+  assert.equal(typeof limbs[31], "string");
+});
+
+test("normalizeSecretForAnchorGeneration matches JWT parser string profile", () => {
+  assert.deepEqual(
+    normalizeSecretForAnchorGeneration({
+      iss: "http://127.0.0.1:4400/google",
+      sub: "google-dev-user-1",
+      aud: "dev-zkwallet-client",
+    }),
+    {
+      aud: "",
+      iss: "\"http://127.0.0.1:4400/google\"",
+      sub: "\"google-dev-user-1\"",
+    }
+  );
+});
+
+test("normalizeJwtStringClaimValue encodes string claims as JSON literals", () => {
+  assert.equal(
+    normalizeJwtStringClaimValue("http://127.0.0.1:4400/google"),
+    "\"http://127.0.0.1:4400/google\""
+  );
+});
+
+test("chainPoseidonHash hashes values iteratively", () => {
+  const calls = [];
+  const result = chainPoseidonHash((inputs) => {
+    calls.push(inputs);
+    return `h(${inputs.join(",")})`;
+  }, ["a", "b", "c"]);
+
+  assert.equal(result, "h(h(h(a),b),c)");
+  assert.deepEqual(calls, [["a"], ["h(a)", "b"], ["h(h(a),b)", "c"]]);
+});
+
+test("createProviderLeaf matches the Rust generate_hash fixture", () => {
+  const leaf = createProviderLeaf({
+    iss: "https://accounts.google.com",
+    publicKey:
+      "vLzd_VDnr8zt9pHfSkO3G0pUlaGJbYkIXXhma9-R9oETx2u0eZ-bSblq71FlA-PWLdjOW1SYtOngVZT5ZxJQ8FRFQolE8YzgByHifgo16ogEmeKdCIlCLd48IETTMOo093BLa2BzDygm8xBcpV_yqlxTUHdw2RH4vf5uulzbHcbdTf94I_DMlNUQX_yTmB8mu3GmDT-1xpL90iVEybjNWEcIrhWGHYqEFkKeBU1hvPf038Lts07eKiBKZWjo7-ZESCPNmdPvVkx29GuIBlwXp3824TB0DR0nhhFncXDuVzxDAUFSrnM0JwPa4ZX4M_xHdtUuk4Bp46wj_kb44jO4yw",
+    maxIssLen: 93,
+    poseidonHash: (inputs) => createService().poseidonHash(inputs).hash,
+  });
+
+  assert.equal(
+    leaf,
+    "0x845216E3AC9E7597B166A57FB053CD030DF5FDAD0C2ABB0A33DBFA95BF687B7"
+  );
 });

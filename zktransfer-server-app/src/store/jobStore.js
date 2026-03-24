@@ -8,7 +8,17 @@ async function ensureStoreFile(filePath) {
   } catch {
     await fs.writeFile(
       filePath,
-      JSON.stringify({ users: {}, requests: {}, transactions: {}, profiles: {} }, null, 2),
+      JSON.stringify(
+        {
+          users: {},
+          requests: {},
+          transactions: {},
+          profiles: {},
+          socialRecoveryAccounts: {},
+        },
+        null,
+        2
+      ),
       "utf8"
     );
   }
@@ -32,6 +42,7 @@ export class JobStore {
     data.requests ||= {};
     data.transactions ||= {};
     data.profiles ||= {};
+    data.socialRecoveryAccounts ||= {};
     return data;
   }
 
@@ -112,6 +123,25 @@ export class JobStore {
       data.transactions[transaction.txHash] = transaction;
       return transaction;
     });
+  }
+
+  async upsertSocialRecoveryAccount(account) {
+    return this.mutate((data) => {
+      data.socialRecoveryAccounts[account.accountId] = account;
+      return account;
+    });
+  }
+
+  async getSocialRecoveryAccount(accountId) {
+    const data = await this.read();
+    return data.socialRecoveryAccounts[accountId] || null;
+  }
+
+  async listSocialRecoveryAccounts() {
+    const data = await this.read();
+    return Object.values(data.socialRecoveryAccounts).sort((a, b) =>
+      a.createdAt < b.createdAt ? 1 : -1
+    );
   }
 
   async getTransaction(txHash) {

@@ -15,7 +15,7 @@ mod test {
 
     use crate::Error;
 
-    use crate::zkwallet::circuit::{FieldMTConfig, PoseidonConfigSet, ZkWalletCircuit};
+    use crate::zkwallet::circuit::{MembershipMTConfig, PoseidonConfigSet, ZkWalletCircuit};
 
     use crate::gadget::merkle_tree_n_ary::mocking::{MockingMerkleTree, get_mocking_merkle_tree};
 
@@ -45,6 +45,9 @@ mod test {
             poseidon_pp_2: poseidon_parameter_bn254_2_to_1::get_poseidon_parameters().into(),
             poseidon_pp_4: poseidon_parameter_bn254_4_to_1::get_poseidon_parameters().into(),
             poseidon_pp_8: poseidon_parameter_bn254_8_to_1::get_poseidon_parameters().into(),
+            membership_poseidon2_pp_3: crate::gadget::hashes::poseidon2::bn254_width3_parameters(),
+            membership_poseidon2_pp_4:
+                crate::gadget::hashes::poseidon2_width4::bn254_width4_parameters(),
         }
     }
 
@@ -201,11 +204,11 @@ mod test {
         });
 
         println!("generate mocking tree");
-        let mock_path = get_mocking_merkle_tree::<8, FieldMTConfig<F>, F>(11);
+        let mock_path = get_mocking_merkle_tree::<4, MembershipMTConfig<F>, F>(11);
         let (valid_proof, rt) = mock_path
             .get_test_path(
-                &hash_param.poseidon_pp_1,
-                &hash_param.poseidon_pp_8,
+                &hash_param.membership_poseidon2_pp_3,
+                &hash_param.membership_poseidon2_pp_4,
                 [cm].as_ref(),
             )
             .unwrap();
@@ -216,6 +219,8 @@ mod test {
             poseidon_pp_2: hash_param.poseidon_pp_2,
             poseidon_pp_4: hash_param.poseidon_pp_4,
             poseidon_pp_8: hash_param.poseidon_pp_8,
+            membership_poseidon2_pp_3: hash_param.membership_poseidon2_pp_3,
+            membership_poseidon2_pp_4: hash_param.membership_poseidon2_pp_4,
             G: elgamal_param,
 
             // inputs
@@ -333,6 +338,35 @@ mod test {
         let tk_addr: F = Fp::from_str("30164109555827864556672284724742514571715490286").unwrap();
         let tk_id: F = F::one();
         let tk_addr_: F = Fp::zero();
+        let tk_id_: F = F::zero();
+
+        let test_input = test_eposeidon_pp_1155_input(
+            v_ena_old, v_ena_new, pv, pv_, dv, dv_, tk_addr, tk_id, tk_addr_, tk_id_, true,
+        )
+        .unwrap();
+
+        let cs = ark_relations::r1cs::ConstraintSystem::new_ref();
+
+        test_input.clone().generate_constraints(cs.clone()).unwrap();
+        assert!(cs.is_satisfied().unwrap());
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_eposeidon_pp_1155_rejects_wrapped_negative_balance() {
+        use ark_relations::r1cs::ConstraintSynthesizer;
+
+        let pv: F = F::zero();
+        let pv_: F = F::zero();
+        let dv: F = F::one();
+        let dv_: F = F::from(2u64);
+
+        let v_ena_old: F = F::one();
+        let v_ena_new: F = F::zero() - F::one();
+
+        let tk_addr: F = Fp::from_str("30164109555827864556672284724742514571715490286").unwrap();
+        let tk_id: F = F::one();
+        let tk_addr_: F = F::zero();
         let tk_id_: F = F::zero();
 
         let test_input = test_eposeidon_pp_1155_input(
